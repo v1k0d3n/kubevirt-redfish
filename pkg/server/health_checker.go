@@ -165,13 +165,16 @@ func (hc *HealthChecker) RunAllChecks() map[string]error {
 
 	results := make(map[string]error)
 	var wg sync.WaitGroup
+	var resultsMutex sync.Mutex
 
 	for name, check := range checks {
 		wg.Add(1)
 		go func(name string, check *HealthCheck) {
 			defer wg.Done()
 			err := hc.runCheck(check)
+			resultsMutex.Lock()
 			results[name] = err
+			resultsMutex.Unlock()
 		}(name, check)
 	}
 
@@ -303,7 +306,7 @@ func (hc *HealthChecker) updateStats(total, successful, failed int64) {
 	hc.stats.SuccessfulChecks += successful
 	hc.stats.FailedChecks += failed
 	hc.stats.LastCheck = time.Now()
-	hc.stats.OverallStatus = hc.GetOverallStatus()
+	// Note: OverallStatus is calculated on-demand in GetStats() to avoid deadlocks
 }
 
 // GetStats returns health checker statistics
@@ -316,7 +319,7 @@ func (hc *HealthChecker) GetStats() *HealthStats {
 		SuccessfulChecks: hc.stats.SuccessfulChecks,
 		FailedChecks:     hc.stats.FailedChecks,
 		LastCheck:        hc.stats.LastCheck,
-		OverallStatus:    hc.stats.OverallStatus,
+		OverallStatus:    hc.GetOverallStatus(), // Calculate on-demand
 		LastReset:        hc.stats.LastReset,
 	}
 }
@@ -337,7 +340,14 @@ func (hc *HealthChecker) Reset() {
 func (hc *HealthChecker) Stop() {
 	logger.Info("Stopping health checker...")
 
-	close(hc.stopChan)
+	// Use select to avoid closing already closed channel
+	select {
+	case <-hc.stopChan:
+		// Channel already closed
+	default:
+		close(hc.stopChan)
+	}
+
 	hc.cancel()
 
 	logger.Info("Health checker stopped")
@@ -524,7 +534,14 @@ func (shm *SelfHealingManager) handleHealthyStatus() {
 func (shm *SelfHealingManager) Stop() {
 	logger.Info("Stopping self-healing manager...")
 
-	close(shm.stopChan)
+	// Use select to avoid closing already closed channel
+	select {
+	case <-shm.stopChan:
+		// Channel already closed
+	default:
+		close(shm.stopChan)
+	}
+
 	shm.cancel()
 
 	logger.Info("Self-healing manager stopped")
