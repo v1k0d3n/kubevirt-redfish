@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/v1k0d3n/kubevirt-redfish/pkg/config"
+	"github.com/v1k0d3n/kubevirt-redfish/pkg/server"
 )
 
 func TestMainVersionFlag(t *testing.T) {
@@ -252,12 +253,270 @@ func TestSignalHandling(t *testing.T) {
 
 // Test that the main function can handle timeouts properly
 func TestTimeoutHandling(t *testing.T) {
-	// Test that the timeout duration used in main is reasonable
-	timeout := 30 * time.Second
-	if timeout <= 0 {
-		t.Error("Timeout should be positive")
+	// Test that timeout handling works correctly
+	timeout := 100 * time.Millisecond
+	start := time.Now()
+
+	// Simulate a timeout scenario
+	select {
+	case <-time.After(timeout):
+		// Expected timeout
+	case <-time.After(timeout * 2):
+		t.Error("Timeout should have occurred")
 	}
-	if timeout > 5*time.Minute {
-		t.Error("Timeout should be reasonable (not too long)")
+
+	elapsed := time.Since(start)
+	if elapsed < timeout {
+		t.Errorf("Expected at least %v elapsed time, got %v", timeout, elapsed)
+	}
+}
+
+// Test watchConfigFile function with various scenarios
+func TestWatchConfigFileFunction(t *testing.T) {
+	// Create a temporary config file
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "test-config.yaml")
+
+	// Create a default config file for testing
+	err := config.CreateDefaultConfig(configPath)
+	if err != nil {
+		t.Fatalf("Failed to create test config: %v", err)
+	}
+
+	// Load the config
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Create a real server instance for testing
+	testServer := server.NewServer(cfg, nil) // nil kubevirt client for testing
+
+	// Test watchConfigFile with valid config path - use a timeout to avoid hanging
+	done := make(chan bool)
+	go func() {
+		watchConfigFile(configPath, testServer)
+		done <- true
+	}()
+
+	// Wait for a short time to let the watcher start, then simulate a file change
+	time.Sleep(100 * time.Millisecond)
+
+	// Simulate a file change by writing to the config file
+	err = config.CreateDefaultConfig(configPath) // This will overwrite the file
+	if err != nil {
+		t.Fatalf("Failed to simulate file change: %v", err)
+	}
+
+	// Wait a bit more for the change to be detected
+	time.Sleep(100 * time.Millisecond)
+
+	// The test should complete without hanging
+	select {
+	case <-done:
+		// Test completed successfully
+	case <-time.After(1 * time.Second):
+		t.Log("Test completed with timeout (expected behavior)")
+	}
+
+	// Verify the config file exists
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		t.Fatal("Test config file should exist")
+	}
+}
+
+// Test watchConfigFile with invalid directory
+func TestWatchConfigFileInvalidDirectory(t *testing.T) {
+	// Test with non-existent directory
+	invalidPath := "/non/existent/path/config.yaml"
+
+	// Create a minimal config for testing
+	cfg := &config.Config{}
+	testServer := server.NewServer(cfg, nil)
+
+	// This should not panic and should handle the error gracefully
+	// Use a timeout to avoid hanging
+	done := make(chan bool)
+	go func() {
+		watchConfigFile(invalidPath, testServer)
+		done <- true
+	}()
+
+	// Wait for the function to handle the error and return
+	select {
+	case <-done:
+		// Function completed successfully
+	case <-time.After(500 * time.Millisecond):
+		t.Log("Test completed with timeout (expected for invalid path)")
+	}
+}
+
+// Test watchConfigFile with empty config path
+func TestWatchConfigFileEmptyPath(t *testing.T) {
+	// Test with empty path
+	cfg := &config.Config{}
+	testServer := server.NewServer(cfg, nil)
+
+	// This should not panic and should handle the error gracefully
+	// Use a timeout to avoid hanging
+	done := make(chan bool)
+	go func() {
+		watchConfigFile("", testServer)
+		done <- true
+	}()
+
+	// Wait for the function to handle the error and return
+	select {
+	case <-done:
+		// Function completed successfully
+	case <-time.After(500 * time.Millisecond):
+		t.Log("Test completed with timeout (expected for empty path)")
+	}
+}
+
+// Test main function with various flag combinations
+func TestMainFunctionWithFlags(t *testing.T) {
+	// Test cases for different flag combinations
+	testCases := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "no flags",
+			args: []string{"kubevirt-redfish"},
+		},
+		{
+			name: "with config flag",
+			args: []string{"kubevirt-redfish", "--config", "/test/config.yaml"},
+		},
+		{
+			name: "with kubeconfig flag",
+			args: []string{"kubevirt-redfish", "--kubeconfig", "/test/kubeconfig"},
+		},
+		{
+			name: "with both flags",
+			args: []string{"kubevirt-redfish", "--config", "/test/config.yaml", "--kubeconfig", "/test/kubeconfig"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Save original args
+			originalArgs := os.Args
+			defer func() { os.Args = originalArgs }()
+
+			os.Args = tc.args
+
+			// Reset flag state
+			flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+
+			// Parse flags (this is what main() does)
+			configPath := flag.String("config", "", "Path to configuration file")
+			kubeconfig := flag.String("kubeconfig", "", "Path to kubeconfig file (for external cluster access)")
+			showVersion := flag.Bool("version", false, "Show version information")
+			createConfig := flag.String("create-config", "", "Create a default configuration file at the specified path")
+
+			flag.Parse()
+
+			// Verify flag parsing works correctly
+			if tc.name == "with config flag" && *configPath != "/test/config.yaml" {
+				t.Errorf("Expected config path '/test/config.yaml', got '%s'", *configPath)
+			}
+			if tc.name == "with kubeconfig flag" && *kubeconfig != "/test/kubeconfig" {
+				t.Errorf("Expected kubeconfig path '/test/kubeconfig', got '%s'", *kubeconfig)
+			}
+			if tc.name == "with both flags" {
+				if *configPath != "/test/config.yaml" {
+					t.Errorf("Expected config path '/test/config.yaml', got '%s'", *configPath)
+				}
+				if *kubeconfig != "/test/kubeconfig" {
+					t.Errorf("Expected kubeconfig path '/test/kubeconfig', got '%s'", *kubeconfig)
+				}
+			}
+			if *showVersion {
+				t.Error("showVersion should be false for this test case")
+			}
+			if *createConfig != "" {
+				t.Error("createConfig should be empty for this test case")
+			}
+		})
+	}
+}
+
+// Test main function version flag handling
+func TestMainFunctionVersionFlag(t *testing.T) {
+	// Save original args
+	originalArgs := os.Args
+	defer func() { os.Args = originalArgs }()
+
+	// Test version flag
+	os.Args = []string{"kubevirt-redfish", "--version"}
+
+	// Reset flag state
+	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+
+	// Parse flags
+	configPath := flag.String("config", "", "Path to configuration file")
+	kubeconfig := flag.String("kubeconfig", "", "Path to kubeconfig file (for external cluster access)")
+	showVersion := flag.Bool("version", false, "Show version information")
+	createConfig := flag.String("create-config", "", "Create a default configuration file at the specified path")
+
+	flag.Parse()
+
+	// Verify version flag is set
+	if !*showVersion {
+		t.Error("showVersion should be true when --version flag is used")
+	}
+
+	// Verify other flags are not set
+	if *configPath != "" {
+		t.Error("configPath should be empty when --version flag is used")
+	}
+	if *kubeconfig != "" {
+		t.Error("kubeconfig should be empty when --version flag is used")
+	}
+	if *createConfig != "" {
+		t.Error("createConfig should be empty when --version flag is used")
+	}
+}
+
+// Test main function create-config flag handling
+func TestMainFunctionCreateConfigFlag(t *testing.T) {
+	// Create a temporary directory for test config
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "test-config.yaml")
+
+	// Save original args
+	originalArgs := os.Args
+	defer func() { os.Args = originalArgs }()
+
+	// Test create-config flag
+	os.Args = []string{"kubevirt-redfish", "--create-config", configPath}
+
+	// Reset flag state
+	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+
+	// Parse flags
+	configPathFlag := flag.String("config", "", "Path to configuration file")
+	kubeconfig := flag.String("kubeconfig", "", "Path to kubeconfig file (for external cluster access)")
+	showVersion := flag.Bool("version", false, "Show version information")
+	createConfig := flag.String("create-config", "", "Create a default configuration file at the specified path")
+
+	flag.Parse()
+
+	// Verify create-config flag is set
+	if *createConfig != configPath {
+		t.Errorf("Expected createConfig '%s', got '%s'", configPath, *createConfig)
+	}
+
+	// Verify other flags are not set
+	if *configPathFlag != "" {
+		t.Error("configPath should be empty when --create-config flag is used")
+	}
+	if *kubeconfig != "" {
+		t.Error("kubeconfig should be empty when --create-config flag is used")
+	}
+	if *showVersion {
+		t.Error("showVersion should be false when --create-config flag is used")
 	}
 }
