@@ -71,11 +71,10 @@ spec:
           value: "{{ .Values.global.namespace }}"
         - name: SERVICE_ACCOUNT
           value: "{{ include "kubevirt-redfish.serviceAccountName" . }}"
-                 - name: SCC_NAME
-           value: "{{ .Values.rbac.scc.customName }}"
+        - name: SCC_NAME
+          value: "{{ .Values.rbac.scc.customName }}"
+      {{- with .Values.podSecurityContext }}
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000000001
-        runAsGroup: 1000000001
-        fsGroup: 1000000001
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
 {{- end }} 

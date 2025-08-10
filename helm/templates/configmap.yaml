@@ -27,6 +27,10 @@ data:
         namespace: "{{ .namespace }}"
         service_account: "{{ .service_account }}"
         description: "{{ .description }}"
+        {{- if .vm_selector }}
+        vm_selector:
+          {{- toYaml .vm_selector | nindent 10 }}
+        {{- end }}
     {{- end }}
 
     authentication:
@@ -40,6 +44,9 @@ data:
     kubevirt:
       api_version: "{{ .Values.kubevirt.api_version }}"
       timeout: {{ .Values.kubevirt.timeout }}
+      {{- if .Values.kubevirt.allow_insecure_tls }}
+      allow_insecure_tls: {{ .Values.kubevirt.allow_insecure_tls }}
+      {{- end }}
 
     datavolume:
       storage_size: "{{ .Values.datavolume.storage_size }}"

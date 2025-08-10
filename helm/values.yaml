@@ -259,6 +259,9 @@ chassis:
     namespace: "default"
     service_account: "kubevirt-redfish"
     description: "Default KubeVirt chassis with virtual machines"
+    vm_selector:
+      labels:
+        redfish-enabled: "true"
 
 # =============================================================================
 # AUTHENTICATION CONFIGURATION
@@ -286,6 +289,10 @@ kubevirt:
   
   # Timeout for KubeVirt API operations (in seconds)
   timeout: 30
+  
+  # Allow insecure TLS for KubeVirt API operations
+  # Set to false in production environments
+  allow_insecure_tls: true
 
 # =============================================================================
 # DATAVOLUME CONFIGURATION
@@ -356,14 +363,11 @@ securityContext:
   runAsNonRoot: true
   
   # User ID to run as (OpenShift compatible)
-  # Note: For OpenShift, use UIDs in range 1000000000-1000099999
-  runAsUser: 1000000001
+  # Note: For OpenShift, use UIDs in range 1000960000-1000969999
+  runAsUser: 1000960000
   
   # Group ID to run as (OpenShift compatible)
-  runAsGroup: 1000000001
-  
-  # File system group ID (OpenShift compatible)
-  fsGroup: 1000000001
+  runAsGroup: 1000960000
 
 # Pod security context
 podSecurityContext:
@@ -371,14 +375,14 @@ podSecurityContext:
   runAsNonRoot: true
   
   # User ID to run as (OpenShift compatible)
-  # Note: For OpenShift, use UIDs in range 1000000000-1000099999
-  runAsUser: 1000000001
+  # Note: For OpenShift, use UIDs in range 1000960000-1000969999
+  runAsUser: 1000960000
   
   # Group ID to run as (OpenShift compatible)
-  runAsGroup: 1000000001
+  runAsGroup: 1000960000
   
   # File system group ID (OpenShift compatible)
-  fsGroup: 1000000001
+  fsGroup: 1000960000
 
 # =============================================================================
 # PLACEMENT CONFIGURATION

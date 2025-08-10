@@ -136,6 +136,7 @@ rbac:
 kubevirt:
   api_version: "v1"
   timeout: 30
+  allow_insecure_tls: true
 
 # =============================================================================
 # SERVER CONFIGURATION
@@ -156,10 +157,16 @@ chassis:
     namespace: "namespace-0"
     service_account: "kubevirt-redfish"
     description: "My KVM cluster with test VMs"
+    vm_selector:
+      labels:
+        redfish-enabled: "true"
   - name: "chassis-1"
     namespace: "namespace-1"
     service_account: "kubevirt-redfish"
     description: "My KVM cluster with test VMs"
+    vm_selector:
+      labels:
+        redfish-enabled: "true"
 
 
 # =============================================================================
@@ -215,15 +222,14 @@ configMap:
 
 securityContext:
   runAsNonRoot: true
-  runAsUser: 1000
-  runAsGroup: 1000
-  fsGroup: 1000
+  runAsUser: 1000960000
+  runAsGroup: 1000960000
 
 podSecurityContext:
   runAsNonRoot: true
-  runAsUser: 1000
-  runAsGroup: 1000
-  fsGroup: 1000
+  runAsUser: 1000960000
+  runAsGroup: 1000960000
+  fsGroup: 1000960000
 
 # =============================================================================
 # PLACEMENT CONFIGURATION
