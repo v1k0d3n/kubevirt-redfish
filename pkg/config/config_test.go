@@ -1087,3 +1087,143 @@ func TestCreateDefaultConfig(t *testing.T) {
 		t.Errorf("Expected default port 8443, got %d", config.Server.Port)
 	}
 }
+
+// TestGetDataVolumeConfig tests the GetDataVolumeConfig method
+func TestGetDataVolumeConfig(t *testing.T) {
+	config := &Config{
+		DataVolume: DataVolumeConfig{
+			StorageSize:        "10Gi",
+			AllowInsecureTLS:   true,
+			StorageClass:       "fast-ssd",
+			VMUpdateTimeout:    "5m",
+			ISODownloadTimeout: "10m",
+		},
+	}
+
+	storageSize, allowInsecureTLS, storageClass, vmUpdateTimeout, isoDownloadTimeout := config.GetDataVolumeConfig()
+
+	// Verify all returned values match the config
+	if storageSize != "10Gi" {
+		t.Errorf("Expected storageSize '10Gi', got '%s'", storageSize)
+	}
+	if !allowInsecureTLS {
+		t.Error("Expected allowInsecureTLS to be true")
+	}
+	if storageClass != "fast-ssd" {
+		t.Errorf("Expected storageClass 'fast-ssd', got '%s'", storageClass)
+	}
+	if vmUpdateTimeout != "5m" {
+		t.Errorf("Expected vmUpdateTimeout '5m', got '%s'", vmUpdateTimeout)
+	}
+	if isoDownloadTimeout != "10m" {
+		t.Errorf("Expected isoDownloadTimeout '10m', got '%s'", isoDownloadTimeout)
+	}
+}
+
+// TestGetDataVolumeConfigWithEmptyValues tests GetDataVolumeConfig with empty/default values
+func TestGetDataVolumeConfigWithEmptyValues(t *testing.T) {
+	config := &Config{
+		DataVolume: DataVolumeConfig{
+			StorageSize:        "",
+			AllowInsecureTLS:   false,
+			StorageClass:       "",
+			VMUpdateTimeout:    "",
+			ISODownloadTimeout: "",
+		},
+	}
+
+	storageSize, allowInsecureTLS, storageClass, vmUpdateTimeout, isoDownloadTimeout := config.GetDataVolumeConfig()
+
+	// Verify all returned values match the config
+	if storageSize != "" {
+		t.Errorf("Expected empty storageSize, got '%s'", storageSize)
+	}
+	if allowInsecureTLS {
+		t.Error("Expected allowInsecureTLS to be false")
+	}
+	if storageClass != "" {
+		t.Errorf("Expected empty storageClass, got '%s'", storageClass)
+	}
+	if vmUpdateTimeout != "" {
+		t.Errorf("Expected empty vmUpdateTimeout, got '%s'", vmUpdateTimeout)
+	}
+	if isoDownloadTimeout != "" {
+		t.Errorf("Expected empty isoDownloadTimeout, got '%s'", isoDownloadTimeout)
+	}
+}
+
+// TestGetKubeVirtConfig tests the GetKubeVirtConfig method
+func TestGetKubeVirtConfig(t *testing.T) {
+	config := &Config{
+		KubeVirt: KubeVirtConfig{
+			APIVersion:       "v1",
+			Timeout:          30,
+			AllowInsecureTLS: true,
+		},
+	}
+
+	apiVersion, timeout, allowInsecureTLS := config.GetKubeVirtConfig()
+
+	// Verify all returned values match the config
+	if apiVersion != "v1" {
+		t.Errorf("Expected apiVersion 'v1', got '%s'", apiVersion)
+	}
+	if timeout != 30 {
+		t.Errorf("Expected timeout 30, got %d", timeout)
+	}
+	if !allowInsecureTLS {
+		t.Error("Expected allowInsecureTLS to be true")
+	}
+}
+
+// TestGetKubeVirtConfigWithDefaultValues tests GetKubeVirtConfig with default values
+func TestGetKubeVirtConfigWithDefaultValues(t *testing.T) {
+	config := &Config{
+		KubeVirt: KubeVirtConfig{
+			APIVersion:       "",
+			Timeout:          0,
+			AllowInsecureTLS: false,
+		},
+	}
+
+	apiVersion, timeout, allowInsecureTLS := config.GetKubeVirtConfig()
+
+	// Verify all returned values match the config
+	if apiVersion != "" {
+		t.Errorf("Expected empty apiVersion, got '%s'", apiVersion)
+	}
+	if timeout != 0 {
+		t.Errorf("Expected timeout 0, got %d", timeout)
+	}
+	if allowInsecureTLS {
+		t.Error("Expected allowInsecureTLS to be false")
+	}
+}
+
+// TestGetKubeVirtConfigWithNilConfig tests GetKubeVirtConfig with nil config
+func TestGetKubeVirtConfigWithNilConfig(t *testing.T) {
+	var config *Config
+
+	// This should panic due to nil pointer dereference
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("Expected panic when calling GetKubeVirtConfig on nil config")
+		}
+	}()
+
+	config.GetKubeVirtConfig()
+}
+
+// TestGetDataVolumeConfigWithNilConfig tests GetDataVolumeConfig with nil config
+func TestGetDataVolumeConfigWithNilConfig(t *testing.T) {
+	var config *Config
+
+	// This should panic due to nil pointer dereference
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("Expected panic when calling GetDataVolumeConfig on nil config")
+		}
+	}()
+
+	config.GetDataVolumeConfig()
+}
