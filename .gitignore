@@ -63,7 +63,7 @@ temp/
 
 # Any possible testing or production based files that may contain sensitive data
 deploy/*
-testing/*
+test/*
 helm/values-*production*.yaml
 
 # Kubeconfig files
