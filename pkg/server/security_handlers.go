@@ -119,6 +119,17 @@ func (h *SecurityHandlers) handleSecurityMetrics(w http.ResponseWriter, r *http.
 		failureRate = float64(metrics.FailedLogins) / float64(metrics.TotalAttempts) * 100
 	}
 
+	// Calculate additional rates with zero division protection
+	blockRate := float64(0)
+	if metrics.TotalAttempts > 0 {
+		blockRate = float64(metrics.BlockedAttempts) / float64(metrics.TotalAttempts) * 100
+	}
+
+	rateLimitRate := float64(0)
+	if metrics.TotalAttempts > 0 {
+		rateLimitRate = float64(metrics.RateLimitHits) / float64(metrics.TotalAttempts) * 100
+	}
+
 	// Create response with enhanced metrics
 	response := map[string]interface{}{
 		"timestamp": time.Now().UTC(),
@@ -126,8 +137,8 @@ func (h *SecurityHandlers) handleSecurityMetrics(w http.ResponseWriter, r *http.
 		"calculated": map[string]interface{}{
 			"success_rate":    successRate,
 			"failure_rate":    failureRate,
-			"block_rate":      float64(metrics.BlockedAttempts) / float64(metrics.TotalAttempts) * 100,
-			"rate_limit_rate": float64(metrics.RateLimitHits) / float64(metrics.TotalAttempts) * 100,
+			"block_rate":      blockRate,
+			"rate_limit_rate": rateLimitRate,
 		},
 		"summary": map[string]interface{}{
 			"total_requests":     metrics.TotalAttempts,
