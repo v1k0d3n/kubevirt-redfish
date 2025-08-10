@@ -382,7 +382,13 @@ func (mm *MemoryMonitor) Stop() {
 		mm.cleanupTicker.Stop()
 	}
 
-	close(mm.stopChan)
+	// Use select to avoid closing an already closed channel
+	select {
+	case <-mm.stopChan:
+		// Channel already closed
+	default:
+		close(mm.stopChan)
+	}
 
 	logger.Info("Memory monitor stopped")
 }
