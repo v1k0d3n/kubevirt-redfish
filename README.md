@@ -65,6 +65,11 @@ The `kubevirt-redfish` project uses [Quay.io](https://quay.io/) to store both th
    helm show values oci://quay.io/bjozsa-redhat/charts/kubevirt-redfish --version 0.2.1
    ```
 
+   NOTE: If you prefer to have a cleaned version of the `values.yaml`, you can run the following to remove any comments from the `values.yaml` output:
+   ```bash
+   helm show values oci://quay.io/bjozsa-redhat/charts/kubevirt-redfish --version 0.2.1 | sed 's/\s*#.*$//' | grep -v '^\s*$'
+   ```
+
 2. To save the `values.yaml` to your your local environment for direct editing, just redirect the output to a YAML file.
    ```bash
    helm show values oci://quay.io/bjozsa-redhat/charts/kubevirt-redfish --version 0.2.1 > my-values.yaml
