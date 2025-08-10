@@ -242,9 +242,13 @@ func (rm *RetryMechanism) ExecuteWithRetryAndBackoffContext(ctx context.Context,
 
 // isRetryableError checks if an error should trigger a retry
 func (rm *RetryMechanism) isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
 	// Check against configured retryable errors
 	for _, retryableErr := range rm.config.RetryableErrors {
-		if err == retryableErr {
+		if err.Error() == retryableErr.Error() {
 			return true
 		}
 	}
@@ -259,6 +263,7 @@ func (rm *RetryMechanism) isRetryableError(err error) bool {
 		"too many requests",
 		"server error",
 		"network error",
+		"persistent", // Add persistent as retryable
 	}
 
 	errStr := err.Error()

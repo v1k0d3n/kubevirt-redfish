@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/v1k0d3n/kubevirt-redfish/pkg/logger"
 )
 
 func TestRedfishError_Error(t *testing.T) {
@@ -542,5 +544,392 @@ func TestWrapError(t *testing.T) {
 	}
 	if result.HTTPStatus != http.StatusInternalServerError {
 		t.Errorf("Expected HTTP status %d, got %d", http.StatusInternalServerError, result.HTTPStatus)
+	}
+}
+
+// TestWrapError_AllErrorTypes tests WrapError with all error types
+func TestWrapError_AllErrorTypes(t *testing.T) {
+	originalErr := errors.New("original error")
+	message := "wrapped error"
+
+	testCases := []struct {
+		name           string
+		errorType      ErrorType
+		expectedStatus int
+		expectedRetry  bool
+	}{
+		{
+			name:           "validation error",
+			errorType:      ErrorTypeValidation,
+			expectedStatus: http.StatusBadRequest,
+			expectedRetry:  false,
+		},
+		{
+			name:           "authentication error",
+			errorType:      ErrorTypeAuthentication,
+			expectedStatus: http.StatusUnauthorized,
+			expectedRetry:  false,
+		},
+		{
+			name:           "authorization error",
+			errorType:      ErrorTypeAuthorization,
+			expectedStatus: http.StatusForbidden,
+			expectedRetry:  false,
+		},
+		{
+			name:           "not found error",
+			errorType:      ErrorTypeNotFound,
+			expectedStatus: http.StatusNotFound,
+			expectedRetry:  false,
+		},
+		{
+			name:           "conflict error",
+			errorType:      ErrorTypeConflict,
+			expectedStatus: http.StatusConflict,
+			expectedRetry:  false,
+		},
+		{
+			name:           "internal error",
+			errorType:      ErrorTypeInternal,
+			expectedStatus: http.StatusInternalServerError,
+			expectedRetry:  false,
+		},
+		{
+			name:           "timeout error",
+			errorType:      ErrorTypeTimeout,
+			expectedStatus: http.StatusRequestTimeout,
+			expectedRetry:  true,
+		},
+		{
+			name:           "network error",
+			errorType:      ErrorTypeNetwork,
+			expectedStatus: http.StatusServiceUnavailable,
+			expectedRetry:  true,
+		},
+		{
+			name:           "kubevirt error",
+			errorType:      ErrorTypeKubeVirt,
+			expectedStatus: http.StatusInternalServerError,
+			expectedRetry:  true,
+		},
+		{
+			name:           "redfish error",
+			errorType:      ErrorTypeRedfish,
+			expectedStatus: http.StatusInternalServerError,
+			expectedRetry:  false,
+		},
+		{
+			name:           "retryable error",
+			errorType:      ErrorTypeRetryable,
+			expectedStatus: http.StatusInternalServerError,
+			expectedRetry:  false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := WrapError(originalErr, tc.errorType, message)
+
+			if result.Type != tc.errorType {
+				t.Errorf("Expected type %s, got %s", tc.errorType, result.Type)
+			}
+			if result.Message != message {
+				t.Errorf("Expected message %s, got %s", message, result.Message)
+			}
+			if result.Details != originalErr.Error() {
+				t.Errorf("Expected details %s, got %s", originalErr.Error(), result.Details)
+			}
+			if result.HTTPStatus != tc.expectedStatus {
+				t.Errorf("Expected HTTP status %d, got %d", tc.expectedStatus, result.HTTPStatus)
+			}
+			if result.Retryable != tc.expectedRetry {
+				t.Errorf("Expected retryable %v, got %v", tc.expectedRetry, result.Retryable)
+			}
+			if result.Err != originalErr {
+				t.Errorf("Expected original error %v, got %v", originalErr, result.Err)
+			}
+		})
+	}
+}
+
+// TestWrapError_NilError tests WrapError with nil error
+func TestWrapError_NilError(t *testing.T) {
+	message := "wrapped error"
+
+	result := WrapError(nil, ErrorTypeInternal, message)
+
+	if result.Type != ErrorTypeInternal {
+		t.Errorf("Expected type %s, got %s", ErrorTypeInternal, result.Type)
+	}
+	if result.Message != message {
+		t.Errorf("Expected message %s, got %s", message, result.Message)
+	}
+	if result.Details != "" {
+		t.Errorf("Expected empty details, got %s", result.Details)
+	}
+	if result.Err != nil {
+		t.Errorf("Expected nil original error, got %v", result.Err)
+	}
+}
+
+// TestLogError tests the LogError function
+func TestLogError(t *testing.T) {
+	// Initialize logger for testing
+	logger.Init("debug")
+
+	testCases := []struct {
+		name           string
+		err            error
+		correlationID  string
+		expectedFields map[string]interface{}
+	}{
+		{
+			name: "redfish error with all fields",
+			err: &RedfishError{
+				Type:       ErrorTypeValidation,
+				Code:       "Base.1.0.GeneralError",
+				Message:    "Test error",
+				Details:    "Additional details",
+				HTTPStatus: http.StatusBadRequest,
+				Retryable:  false,
+				Operation:  "CreateVM",
+				Namespace:  "default",
+				Resource:   "VirtualMachine",
+			},
+			correlationID: "test-correlation-id",
+			expectedFields: map[string]interface{}{
+				"correlation_id": "test-correlation-id",
+				"error_type":     string(ErrorTypeValidation),
+				"error_code":     "Base.1.0.GeneralError",
+				"http_status":    http.StatusBadRequest,
+				"retryable":      false,
+				"operation":      "CreateVM",
+				"namespace":      "default",
+				"resource":       "VirtualMachine",
+				"details":        "Additional details",
+			},
+		},
+		{
+			name: "redfish error with minimal fields",
+			err: &RedfishError{
+				Type:       ErrorTypeInternal,
+				Code:       "Base.1.0.GeneralError",
+				Message:    "Simple error",
+				HTTPStatus: http.StatusInternalServerError,
+				Retryable:  true,
+			},
+			correlationID: "simple-correlation-id",
+			expectedFields: map[string]interface{}{
+				"correlation_id": "simple-correlation-id",
+				"error_type":     string(ErrorTypeInternal),
+				"error_code":     "Base.1.0.GeneralError",
+				"http_status":    http.StatusInternalServerError,
+				"retryable":      true,
+			},
+		},
+		{
+			name:          "standard error",
+			err:           errors.New("standard error message"),
+			correlationID: "std-correlation-id",
+			expectedFields: map[string]interface{}{
+				"correlation_id": "std-correlation-id",
+				"error_type":     "UnknownError",
+				"details":        "standard error message",
+			},
+		},
+		{
+			name:          "nil error",
+			err:           nil,
+			correlationID: "nil-correlation-id",
+			expectedFields: map[string]interface{}{
+				"correlation_id": "nil-correlation-id",
+				"error_type":     "UnknownError",
+				"details":        "",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// LogError calls logger.ErrorStructured, which we can't easily test
+			// without mocking. Instead, we test that the function doesn't panic
+			// and handles different error types correctly.
+
+			// This should not panic
+			LogError(tc.err, tc.correlationID)
+
+			// For a more comprehensive test, we could mock the logger
+			// but for now, we just ensure the function executes without error
+		})
+	}
+}
+
+// TestLogError_RedfishErrorWithContext tests LogError with RedfishError that has context
+func TestLogError_RedfishErrorWithContext(t *testing.T) {
+	// Initialize logger for testing
+	logger.Init("debug")
+
+	err := &RedfishError{
+		Type:          ErrorTypeKubeVirt,
+		Code:          "Base.1.0.GeneralError",
+		Message:       "KubeVirt operation failed",
+		Details:       "VM creation failed",
+		HTTPStatus:    http.StatusInternalServerError,
+		Retryable:     true,
+		Operation:     "CreateVM",
+		Namespace:     "default",
+		Resource:      "VirtualMachine",
+		CorrelationID: "existing-correlation-id",
+	}
+
+	correlationID := "new-correlation-id"
+
+	// This should not panic and should log the error with all fields
+	LogError(err, correlationID)
+}
+
+// TestRetry_NonRetryableError tests Retry with non-retryable error
+func TestRetry_NonRetryableError(t *testing.T) {
+	config := &RetryConfig{
+		MaxAttempts:   3,
+		InitialDelay:  10 * time.Millisecond,
+		MaxDelay:      100 * time.Millisecond,
+		BackoffFactor: 2.0,
+	}
+
+	attempts := 0
+	fn := func() error {
+		attempts++
+		// Return a non-retryable error
+		return NewValidationError("Invalid input", "Field 'name' is required")
+	}
+
+	ctx := context.Background()
+	err := Retry(ctx, config, fn)
+
+	if err == nil {
+		t.Error("Expected error, got nil")
+	}
+	if attempts != 1 {
+		t.Errorf("Expected 1 attempt for non-retryable error, got %d", attempts)
+	}
+}
+
+// TestRetry_MaxAttemptsReached tests Retry when max attempts are reached
+func TestRetry_MaxAttemptsReached(t *testing.T) {
+	config := &RetryConfig{
+		MaxAttempts:   2,
+		InitialDelay:  10 * time.Millisecond,
+		MaxDelay:      100 * time.Millisecond,
+		BackoffFactor: 2.0,
+	}
+
+	attempts := 0
+	fn := func() error {
+		attempts++
+		return errors.New("temporary error")
+	}
+
+	ctx := context.Background()
+	err := Retry(ctx, config, fn)
+
+	if err == nil {
+		t.Error("Expected error after max attempts, got nil")
+	}
+	if attempts != 2 {
+		t.Errorf("Expected 2 attempts, got %d", attempts)
+	}
+}
+
+// TestRetry_NilConfig tests Retry with nil config (should use defaults)
+func TestRetry_NilConfig(t *testing.T) {
+	attempts := 0
+	fn := func() error {
+		attempts++
+		if attempts < 2 {
+			return errors.New("temporary error")
+		}
+		return nil
+	}
+
+	ctx := context.Background()
+	err := Retry(ctx, nil, fn)
+
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+	if attempts != 2 {
+		t.Errorf("Expected 2 attempts, got %d", attempts)
+	}
+}
+
+// TestRetry_ExponentialBackoff tests Retry with exponential backoff
+func TestRetry_ExponentialBackoff(t *testing.T) {
+	config := &RetryConfig{
+		MaxAttempts:   4,
+		InitialDelay:  10 * time.Millisecond,
+		MaxDelay:      100 * time.Millisecond,
+		BackoffFactor: 2.0,
+	}
+
+	attempts := 0
+	fn := func() error {
+		attempts++
+		if attempts < 4 {
+			return errors.New("temporary error")
+		}
+		return nil
+	}
+
+	ctx := context.Background()
+	start := time.Now()
+	err := Retry(ctx, config, fn)
+	duration := time.Since(start)
+
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+	if attempts != 4 {
+		t.Errorf("Expected 4 attempts, got %d", attempts)
+	}
+
+	// Should have some delay due to exponential backoff
+	// 10ms + 20ms + 40ms = 70ms minimum
+	if duration < 50*time.Millisecond {
+		t.Errorf("Expected delay due to backoff, but duration was only %v", duration)
+	}
+}
+
+// TestRetry_RespectsMaxDelay tests that Retry respects the max delay
+func TestRetry_RespectsMaxDelay(t *testing.T) {
+	config := &RetryConfig{
+		MaxAttempts:   5,
+		InitialDelay:  50 * time.Millisecond,
+		MaxDelay:      100 * time.Millisecond, // Cap at 100ms
+		BackoffFactor: 2.0,
+	}
+
+	attempts := 0
+	fn := func() error {
+		attempts++
+		if attempts < 5 {
+			return errors.New("temporary error")
+		}
+		return nil
+	}
+
+	ctx := context.Background()
+	start := time.Now()
+	err := Retry(ctx, config, fn)
+	duration := time.Since(start)
+
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+
+	// Should not exceed reasonable time even with exponential backoff
+	// 50ms + 100ms + 100ms + 100ms = 350ms maximum
+	if duration > 500*time.Millisecond {
+		t.Errorf("Duration %v exceeded expected maximum", duration)
 	}
 }

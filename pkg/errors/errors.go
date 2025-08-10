@@ -249,10 +249,14 @@ func LogError(err error, correlationID string) {
 
 		logger.ErrorStructured(redfishErr.Message, fields)
 	} else {
+		details := ""
+		if err != nil {
+			details = err.Error()
+		}
 		fields := map[string]interface{}{
 			"correlation_id": correlationID,
 			"error_type":     "UnknownError",
-			"details":        err.Error(),
+			"details":        details,
 		}
 		logger.ErrorStructured("Unknown error occurred", fields)
 	}
@@ -369,11 +373,16 @@ func GetHTTPStatus(err error) int {
 
 // WrapError wraps an existing error with Redfish error information
 func WrapError(err error, errorType ErrorType, message string) *RedfishError {
+	details := ""
+	if err != nil {
+		details = err.Error()
+	}
+
 	redfishErr := &RedfishError{
 		Type:       errorType,
 		Code:       "Base.1.0.GeneralError",
 		Message:    message,
-		Details:    err.Error(),
+		Details:    details,
 		HTTPStatus: http.StatusInternalServerError,
 		Retryable:  false,
 		Err:        err,
