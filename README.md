@@ -62,21 +62,21 @@ The `kubevirt-redfish` project uses [Quay.io](https://quay.io/) to store both th
 
 1. You can review the sample `values.yaml` included with the Helm chart with the following command.
    ```bash
-   helm show values oci://quay.io/bjozsa-redhat/charts/kubevirt-redfish --version 0.2.0
+   helm show values oci://quay.io/bjozsa-redhat/charts/kubevirt-redfish --version 0.2.1
    ```
 
 2. To save the `values.yaml` to your your local environment for direct editing, just redirect the output to a YAML file.
    ```bash
-   helm show values oci://quay.io/bjozsa-redhat/charts/kubevirt-redfish --version 0.2.0 > my-values.yaml
+   helm show values oci://quay.io/bjozsa-redhat/charts/kubevirt-redfish --version 0.2.1 > my-values.yaml
    ```
 
 3. You can also save the chart locally by issuing the following command.
    ```bash
    # Download the Chart locally:
-   helm pull oci://quay.io/bjozsa-redhat/charts/kubevirt-redfish --version 0.2.0
+   helm pull oci://quay.io/bjozsa-redhat/charts/kubevirt-redfish --version 0.2.1
    
    # Explode the tar file:
-   tar -xzf kubevirt-redfish-0.2.0.tgz
+   tar -xzf kubevirt-redfish-0.2.1.tgz
 
    # Make a copy of the sample values.yaml manifest:
    cp kubevirt-redfish/values.yaml my-values.yaml
@@ -93,7 +93,7 @@ The `kubevirt-redfish` project uses [Quay.io](https://quay.io/) to store both th
 5. You can also ***optionally*** use inline edits during the `helm install` command.
    ```bash
    helm install kubevirt-redfish oci://quay.io/bjozsa-redhat/charts/kubevirt-redfish \
-     --set image.tag=v0.2.0 \
+     --set image.tag=v0.2.1 \
      --set service.type=LoadBalancer \
      --namespace kubevirt-redfish \
      --create-namespace
