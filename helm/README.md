@@ -4,7 +4,7 @@ This Helm chart deploys the KubeVirt Redfish API server, which provides a Redfis
 
 ## Chart Version
 
-- **Chart Version**: 0.2.1
+- **Chart Version**: 0.2.1-73abb30
 - **App Version**: v0.2.1
 - **Kubernetes**: 1.25+
 - **Helm**: 3.0+
