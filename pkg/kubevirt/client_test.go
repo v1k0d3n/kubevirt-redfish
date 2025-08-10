@@ -20,10 +20,13 @@
 package kubevirt
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
 	"time"
+
+	"k8s.io/client-go/rest"
 )
 
 // Mock config that implements the required interfaces
@@ -1012,18 +1015,288 @@ func TestVMSelectorConfig_Validation(t *testing.T) {
 	// Test empty selector
 	selector := &VMSelectorConfig{}
 	if len(selector.Labels) != 0 || len(selector.Names) != 0 {
-		t.Error("Empty selector should have empty maps/slices")
+		t.Error("Empty selector should have empty labels and names")
 	}
 
-	// Test selector with labels
+	// Test with labels
 	selector = &VMSelectorConfig{
-		Labels: map[string]string{"app": "test", "env": "prod"},
-		Names:  []string{"vm1", "vm2", "vm3"},
+		Labels: map[string]string{"app": "test"},
 	}
-	if len(selector.Labels) != 2 {
-		t.Errorf("Expected 2 labels, got %d", len(selector.Labels))
+	if selector.Labels["app"] != "test" {
+		t.Error("Label should be set correctly")
 	}
-	if len(selector.Names) != 3 {
-		t.Errorf("Expected 3 names, got %d", len(selector.Names))
+
+	// Test with names
+	selector = &VMSelectorConfig{
+		Names: []string{"vm1", "vm2"},
 	}
+	if len(selector.Names) != 2 || selector.Names[0] != "vm1" || selector.Names[1] != "vm2" {
+		t.Error("Names should be set correctly")
+	}
+}
+
+// Test executePauseRequestWithDynamicClient function
+func TestClient_ExecutePauseRequestWithDynamicClient(t *testing.T) {
+	ctx := context.Background()
+	namespace := "test-namespace"
+	name := "test-vmi"
+	correlationID := "test-correlation-id"
+
+	// Test with nil client (should panic, but we can test the panic)
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("Expected panic with nil client")
+		}
+	}()
+
+	var client *Client
+	client.executePauseRequestWithDynamicClient(ctx, namespace, name, correlationID)
+}
+
+// Test executePauseRequestWithDynamicClient with invalid config
+func TestClient_ExecutePauseRequestWithDynamicClient_InvalidConfig(t *testing.T) {
+	// Create a mock client with invalid config
+	client := &Client{
+		config: &rest.Config{
+			Host: "invalid://host",
+		},
+		timeout: 30 * time.Second,
+	}
+
+	ctx := context.Background()
+	namespace := "test-namespace"
+	name := "test-vmi"
+	correlationID := "test-correlation-id"
+
+	// Test with invalid config (should fail)
+	err := client.executePauseRequestWithDynamicClient(ctx, namespace, name, correlationID)
+	if err == nil {
+		t.Error("Expected error with invalid config")
+	}
+}
+
+// Test executeUnpauseRequestWithDynamicClient function
+func TestClient_ExecuteUnpauseRequestWithDynamicClient(t *testing.T) {
+	ctx := context.Background()
+	namespace := "test-namespace"
+	name := "test-vmi"
+	correlationID := "test-correlation-id"
+
+	// Test with nil client (should panic, but we can test the panic)
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("Expected panic with nil client")
+		}
+	}()
+
+	var client *Client
+	client.executeUnpauseRequestWithDynamicClient(ctx, namespace, name, correlationID)
+}
+
+// Test executeUnpauseRequestWithDynamicClient with invalid config
+func TestClient_ExecuteUnpauseRequestWithDynamicClient_InvalidConfig(t *testing.T) {
+	// Create a mock client with invalid config
+	client := &Client{
+		config: &rest.Config{
+			Host: "invalid://host",
+		},
+		timeout: 30 * time.Second,
+	}
+
+	ctx := context.Background()
+	namespace := "test-namespace"
+	name := "test-vmi"
+	correlationID := "test-correlation-id"
+
+	// Test with invalid config (should fail)
+	err := client.executeUnpauseRequestWithDynamicClient(ctx, namespace, name, correlationID)
+	if err == nil {
+		t.Error("Expected error with invalid config")
+	}
+}
+
+// Test getUploadProxyURL function with various scenarios
+func TestClient_GetUploadProxyURL_EdgeCases(t *testing.T) {
+	// Test with nil client (should panic)
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("Expected panic with nil client")
+		}
+	}()
+
+	var client *Client
+	client.getUploadProxyURL()
+}
+
+// Test getUploadProxyURL function with nil kubernetes client
+func TestClient_GetUploadProxyURL_NilKubeClient(t *testing.T) {
+	// Test with nil kubernetes client (should panic)
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("Expected panic with nil kubernetes client")
+		}
+	}()
+
+	client := &Client{
+		kubernetesClient: nil,
+		timeout:          30 * time.Second,
+	}
+	client.getUploadProxyURL()
+}
+
+// Test createCertConfigMap function with various scenarios
+func TestClient_CreateCertConfigMap_EdgeCases(t *testing.T) {
+	// Test with nil client (should panic)
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("Expected panic with nil client")
+		}
+	}()
+
+	var client *Client
+	client.createCertConfigMap("test-namespace", "test-configmap", "invalid-url")
+}
+
+// Test createCertConfigMap function with invalid URL
+func TestClient_CreateCertConfigMap_InvalidURL(t *testing.T) {
+	// Test with invalid URL (should panic due to nil kubernetes client)
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("Expected panic with nil kubernetes client")
+		}
+	}()
+
+	client := &Client{
+		timeout: 30 * time.Second,
+	}
+	client.createCertConfigMap("test-namespace", "test-configmap", "invalid-url")
+}
+
+// Test createCertConfigMap function with valid URL but nil kubernetes client
+func TestClient_CreateCertConfigMap_NilKubeClient(t *testing.T) {
+	// Test with valid URL but nil kubernetes client (should panic)
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("Expected panic with nil kubernetes client")
+		}
+	}()
+
+	client := &Client{
+		timeout: 30 * time.Second,
+	}
+	client.createCertConfigMap("test-namespace", "test-configmap", "https://example.com/image.iso")
+}
+
+// Test fetchServerCertificate function with various scenarios
+func TestClient_FetchServerCertificate_EdgeCases(t *testing.T) {
+	// Test with nil client (should not panic, but will fail with connection error)
+	var client *Client
+	_, err := client.fetchServerCertificate("invalid-host")
+	if err == nil {
+		t.Error("Expected error with nil client")
+	}
+}
+
+// Test fetchServerCertificate function with empty host
+func TestClient_FetchServerCertificate_EmptyHost(t *testing.T) {
+	// Test with empty host
+	client := &Client{
+		timeout: 30 * time.Second,
+	}
+	_, err := client.fetchServerCertificate("")
+	if err == nil {
+		t.Error("Expected error with empty host")
+	}
+}
+
+// Test fetchServerCertificate function with invalid host
+func TestClient_FetchServerCertificate_InvalidHost(t *testing.T) {
+	// Test with invalid host
+	client := &Client{
+		timeout: 30 * time.Second,
+	}
+	_, err := client.fetchServerCertificate("invalid-host:invalid-port")
+	if err == nil {
+		t.Error("Expected error with invalid host")
+	}
+}
+
+// Test getDataVolumeConfig function with nil client
+func TestClient_GetDataVolumeConfig_NilClient(t *testing.T) {
+	// Test with nil client (should panic)
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("Expected panic with nil client")
+		}
+	}()
+
+	var client *Client
+	client.getDataVolumeConfig()
+}
+
+// Test getDataVolumeConfig function with nil appConfig
+func TestClient_GetDataVolumeConfig_NilAppConfig(t *testing.T) {
+	// Test with client but nil appConfig
+	client := &Client{
+		timeout:   30 * time.Second,
+		appConfig: nil,
+	}
+	storageSize, allowInsecureTLS, storageClass, vmUpdateTimeout, isoDownloadTimeout := client.getDataVolumeConfig()
+	if storageSize != "10Gi" || allowInsecureTLS || storageClass != "" || vmUpdateTimeout != "30s" || isoDownloadTimeout != "30m" {
+		t.Error("Expected default values with nil appConfig")
+	}
+}
+
+// Test getKubeVirtConfig function with nil client
+func TestClient_GetKubeVirtConfig_NilClient(t *testing.T) {
+	// Test with nil client (should panic)
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("Expected panic with nil client")
+		}
+	}()
+
+	var client *Client
+	client.getKubeVirtConfig()
+}
+
+// Test getKubeVirtConfig function with nil appConfig
+func TestClient_GetKubeVirtConfig_NilAppConfig(t *testing.T) {
+	// Test with client but nil appConfig
+	client := &Client{
+		timeout:   30 * time.Second,
+		appConfig: nil,
+	}
+	apiVersion, timeout, allowInsecureTLS := client.getKubeVirtConfig()
+	if apiVersion != "v1" || timeout != 30 || allowInsecureTLS {
+		t.Error("Expected default values with nil appConfig")
+	}
+}
+
+// Test cleanupExistingDataVolume function
+func TestClient_CleanupExistingDataVolume_EdgeCases(t *testing.T) {
+	// Test with nil client (should panic)
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("Expected panic with nil client")
+		}
+	}()
+
+	var client *Client
+	client.cleanupExistingDataVolume("test-namespace", "test-datavolume")
+}
+
+// Test cleanupExistingDataVolume function with nil kubernetes client
+func TestClient_CleanupExistingDataVolume_NilKubeClient(t *testing.T) {
+	// Test with nil kubernetes client (should panic)
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("Expected panic with nil kubernetes client")
+		}
+	}()
+
+	client := &Client{
+		timeout: 30 * time.Second,
+	}
+	client.cleanupExistingDataVolume("test-namespace", "test-datavolume")
 }
