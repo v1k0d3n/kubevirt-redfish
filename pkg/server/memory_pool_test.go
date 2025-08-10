@@ -594,3 +594,95 @@ func TestBufferPool_FullPool(t *testing.T) {
 		t.Errorf("Expected total_returned -1, got %v", stats["total_returned"])
 	}
 }
+
+func TestMemoryManager_PerformCleanup(t *testing.T) {
+	mm := NewMemoryManager()
+	defer mm.Stop()
+
+	// Perform some operations to generate memory usage
+	buf := mm.GetBuffer()
+	buf.WriteString("test data")
+	mm.PutBuffer(buf)
+
+	encoder := mm.GetEncoder(buf)
+	mm.PutEncoder(encoder)
+
+	resp := mm.GetResponse()
+	resp.StatusCode = 200
+	mm.PutResponse(resp)
+
+	// Perform cleanup
+	mm.performCleanup()
+
+	// Get final stats
+	finalStats := mm.GetStats()
+	finalUsage := finalStats["overall"].(map[string]interface{})["current_usage"].(int64)
+
+	// Verify cleanup updated the stats
+	if finalUsage < 0 {
+		t.Errorf("Expected non-negative current usage after cleanup, got %d", finalUsage)
+	}
+
+	// Verify peak usage is tracked
+	peakUsage := finalStats["overall"].(map[string]interface{})["peak_usage"].(int64)
+	if peakUsage < 0 {
+		t.Errorf("Expected non-negative peak usage, got %d", peakUsage)
+	}
+
+	// Verify uptime is tracked
+	uptime := finalStats["overall"].(map[string]interface{})["uptime"].(string)
+	if uptime == "" {
+		t.Error("Expected non-empty uptime")
+	}
+}
+
+func TestMemoryManager_UpdateStats(t *testing.T) {
+	mm := NewMemoryManager()
+	defer mm.Stop()
+
+	// Perform some operations to change stats
+	buf := mm.GetBuffer()
+	buf.WriteString("test data")
+	mm.PutBuffer(buf)
+
+	encoder := mm.GetEncoder(buf)
+	mm.PutEncoder(encoder)
+
+	resp := mm.GetResponse()
+	resp.StatusCode = 200
+	mm.PutResponse(resp)
+
+	// Update stats
+	mm.updateStats()
+
+	// Get stats
+	stats := mm.GetStats()
+	currentUsage := stats["overall"].(map[string]interface{})["current_usage"].(int64)
+
+	// Verify stats were updated
+	if currentUsage < 0 {
+		t.Errorf("Expected non-negative current usage, got %d", currentUsage)
+	}
+
+	// Verify peak usage is tracked
+	peakUsage := stats["overall"].(map[string]interface{})["peak_usage"].(int64)
+	if peakUsage < 0 {
+		t.Errorf("Expected non-negative peak usage, got %d", peakUsage)
+	}
+
+	// Verify all pool stats are included
+	bufferStats := stats["buffer_pool"].(map[string]interface{})
+	if bufferStats == nil {
+		t.Error("Expected buffer pool stats to be included")
+	}
+
+	encoderStats := stats["encoder_pool"].(map[string]interface{})
+	if encoderStats == nil {
+		t.Error("Expected encoder pool stats to be included")
+	}
+
+	responseStats := stats["response_pool"].(map[string]interface{})
+	if responseStats == nil {
+		t.Error("Expected response pool stats to be included")
+	}
+}

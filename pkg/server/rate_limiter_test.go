@@ -653,3 +653,111 @@ func TestRateLimitManager_ResetAll(t *testing.T) {
 		t.Errorf("Expected 0 total requests for limiter2 after reset, got %d", stats2.TotalRequests)
 	}
 }
+
+func TestRateLimiter_GetUserBucket(t *testing.T) {
+	logger.Init("debug")
+
+	config := RateLimitConfig{
+		RequestsPerSecond: 10.0,
+		BurstSize:         20,
+		Strategy:          StrategyTokenBucket,
+		WindowSize:        1 * time.Second,
+		UserBased:         true,
+		IPBased:           false,
+		EndpointBased:     false,
+	}
+
+	rl := NewRateLimiter(config)
+
+	// Test getting bucket for new user
+	user1 := "user1"
+	bucket1 := rl.getUserBucket(user1)
+
+	if bucket1 == nil {
+		t.Fatal("Expected non-nil bucket for new user")
+	}
+
+	// Test getting bucket for same user (should return same bucket)
+	bucket1Again := rl.getUserBucket(user1)
+	if bucket1 != bucket1Again {
+		t.Error("Expected same bucket for same user")
+	}
+
+	// Test getting bucket for different user
+	user2 := "user2"
+	bucket2 := rl.getUserBucket(user2)
+
+	if bucket2 == nil {
+		t.Fatal("Expected non-nil bucket for different user")
+	}
+
+	if bucket1 == bucket2 {
+		t.Error("Expected different buckets for different users")
+	}
+
+	// Verify bucket configuration
+	if bucket1.capacity != float64(config.BurstSize) {
+		t.Errorf("Expected bucket capacity %f, got %f", float64(config.BurstSize), bucket1.capacity)
+	}
+
+	if bucket1.rate != config.RequestsPerSecond {
+		t.Errorf("Expected bucket rate %f, got %f", config.RequestsPerSecond, bucket1.rate)
+	}
+}
+
+func TestRateLimiter_MarshalJSON(t *testing.T) {
+	logger.Init("debug")
+
+	config := RateLimitConfig{
+		RequestsPerSecond: 10.0,
+		BurstSize:         20,
+		Strategy:          StrategyTokenBucket,
+		WindowSize:        1 * time.Second,
+		UserBased:         true,
+		IPBased:           false,
+		EndpointBased:     false,
+	}
+
+	rl := NewRateLimiter(config)
+
+	// Test marshaling JSON
+	data := map[string]string{"test": "data"}
+	jsonData, err := rl.marshalJSON(data)
+
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+
+	if jsonData == nil {
+		t.Fatal("Expected non-nil JSON data")
+	}
+
+	// Verify the returned JSON contains expected error message
+	jsonString := string(jsonData)
+
+	if !contains(jsonString, "TooManyRequests") {
+		t.Errorf("Expected JSON to contain 'TooManyRequests', got: %s", jsonString)
+	}
+
+	if !contains(jsonString, "Rate limit exceeded") {
+		t.Errorf("Expected JSON to contain 'Rate limit exceeded', got: %s", jsonString)
+	}
+
+	if !contains(jsonString, "retry_after") {
+		t.Errorf("Expected JSON to contain 'retry_after', got: %s", jsonString)
+	}
+}
+
+// Helper function to check if string contains substring
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || (len(s) > len(substr) && (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || containsHelper(s, substr))))
+}
+
+func containsHelper(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}

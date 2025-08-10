@@ -641,3 +641,82 @@ func TestConnectionManager_EdgeCases(t *testing.T) {
 		cm.DoRequestWithContext(context.Background(), nil)
 	}()
 }
+
+func TestHTTPClientPool_PerformCleanup(t *testing.T) {
+	logger.Init("debug")
+
+	// Create a pool with small size to trigger cleanup
+	pool := NewHTTPClientPool(2, 30*time.Second)
+	defer pool.Stop()
+
+	// Fill the pool with clients
+	clients := make([]*http.Client, 0, 4)
+	for i := 0; i < 4; i++ {
+		client := pool.Get()
+		if client != nil {
+			clients = append(clients, client)
+		}
+	}
+
+	// Return all clients to the pool
+	for _, client := range clients {
+		pool.Put(client)
+	}
+
+	// Perform cleanup
+	pool.performCleanup()
+
+	// Get stats after cleanup
+	finalStats := pool.GetStats()
+	finalActive := finalStats["current_active"].(int64)
+
+	// Verify cleanup didn't break the pool
+	if finalActive < 0 {
+		t.Errorf("Expected non-negative active connections after cleanup, got %d", finalActive)
+	}
+
+	// Verify we can still get clients after cleanup
+	client := pool.Get()
+	if client == nil {
+		t.Error("Expected to be able to get client after cleanup")
+	} else {
+		pool.Put(client)
+	}
+}
+
+func TestConnectionManager_UpdateStats(t *testing.T) {
+	logger.Init("debug")
+
+	cm := NewConnectionManager()
+	defer cm.Stop()
+
+	// Perform some operations to change stats
+	client := cm.GetHTTPClient()
+	if client != nil {
+		cm.PutHTTPClient(client)
+	}
+
+	// Update stats
+	cm.updateStats()
+
+	// Get final stats
+	finalStats := cm.GetStats()
+	finalActive := finalStats["overall"].(map[string]interface{})["active_connections"].(int64)
+
+	// Verify stats were updated
+	if finalActive < 0 {
+		t.Errorf("Expected non-negative active connections, got %d", finalActive)
+	}
+
+	// Verify peak connections is tracked
+	peakConnections := finalStats["overall"].(map[string]interface{})["peak_connections"].(int64)
+	if peakConnections < 0 {
+		t.Errorf("Expected non-negative peak connections, got %d", peakConnections)
+	}
+
+	// Verify uptime is tracked
+	uptime := finalStats["overall"].(map[string]interface{})["uptime"].(string)
+	if uptime == "" {
+		t.Error("Expected non-empty uptime")
+	}
+}

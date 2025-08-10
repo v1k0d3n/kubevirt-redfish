@@ -812,3 +812,140 @@ func TestHealthChecker_EdgeCases(t *testing.T) {
 		t.Error("Nil check should exist")
 	}
 }
+
+func TestHealthChecker_RunPeriodicChecks(t *testing.T) {
+	hc := NewHealthChecker()
+	defer hc.Stop()
+
+	// Add a check that's due for running
+	check := &HealthCheck{
+		Name:        "test-check",
+		Description: "Test check",
+		Check:       func() error { return nil },
+		Interval:    1 * time.Second,
+		LastCheck:   time.Now().Add(-2 * time.Second), // Set to 2 seconds ago
+		Status:      StatusUnknown,
+	}
+
+	hc.AddCheck(check)
+
+	// Run periodic checks
+	hc.runPeriodicChecks()
+
+	// Give some time for the goroutine to complete
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify the check was updated
+	updatedCheck, exists := hc.GetCheck("test-check")
+	if !exists {
+		t.Error("Check should still exist after periodic checks")
+	}
+
+	// The check should have been updated (LastCheck should be recent)
+	if time.Since(updatedCheck.LastCheck) > 1*time.Second {
+		t.Error("Check should have been updated recently")
+	}
+}
+
+func TestSelfHealingManager_PerformSelfHealing(t *testing.T) {
+	hc := NewHealthChecker()
+	defer hc.Stop()
+
+	cbm := NewCircuitBreakerManager()
+	defer cbm.Stop()
+
+	rm := NewRetryManager()
+
+	shm := NewSelfHealingManager(hc, cbm, rm)
+	defer shm.Stop()
+
+	// Test performSelfHealing with healthy status
+	// Add a healthy check
+	check := &HealthCheck{
+		Name:        "test-check",
+		Description: "Test check",
+		Check:       func() error { return nil },
+		Status:      StatusHealthy,
+	}
+
+	hc.AddCheck(check)
+
+	// Call performSelfHealing directly
+	shm.performSelfHealing()
+
+	// Should not panic and should complete successfully
+}
+
+func TestSelfHealingManager_HandleUnhealthyStatus(t *testing.T) {
+	hc := NewHealthChecker()
+	defer hc.Stop()
+
+	cbm := NewCircuitBreakerManager()
+	defer cbm.Stop()
+
+	rm := NewRetryManager()
+
+	shm := NewSelfHealingManager(hc, cbm, rm)
+	defer shm.Stop()
+
+	// Add a circuit breaker and force it open
+	config := CircuitBreakerConfig{
+		Name:             "test-breaker",
+		FailureThreshold: 3,
+		SuccessThreshold: 2,
+		Timeout:          1 * time.Second,
+		WindowSize:       1 * time.Minute,
+	}
+
+	breaker := cbm.GetOrCreate("test-breaker", config)
+	breaker.ForceOpen()
+
+	// Verify breaker is open
+	if breaker.GetState() != StateOpen {
+		t.Error("Expected circuit breaker to be open")
+	}
+
+	// Call handleUnhealthyStatus
+	shm.handleUnhealthyStatus()
+
+	// Verify breaker was reset (should be closed now)
+	if breaker.GetState() != StateClosed {
+		t.Error("Expected circuit breaker to be closed after self-healing")
+	}
+}
+
+func TestSelfHealingManager_HandleDegradedStatus(t *testing.T) {
+	hc := NewHealthChecker()
+	defer hc.Stop()
+
+	cbm := NewCircuitBreakerManager()
+	defer cbm.Stop()
+
+	rm := NewRetryManager()
+
+	shm := NewSelfHealingManager(hc, cbm, rm)
+	defer shm.Stop()
+
+	// Call handleDegradedStatus
+	shm.handleDegradedStatus()
+
+	// Should not panic and should complete successfully
+}
+
+func TestSelfHealingManager_HandleHealthyStatus(t *testing.T) {
+	hc := NewHealthChecker()
+	defer hc.Stop()
+
+	cbm := NewCircuitBreakerManager()
+	defer cbm.Stop()
+
+	rm := NewRetryManager()
+
+	shm := NewSelfHealingManager(hc, cbm, rm)
+	defer shm.Stop()
+
+	// Call handleHealthyStatus
+	shm.handleHealthyStatus()
+
+	// Should not panic and should complete successfully
+}

@@ -645,3 +645,98 @@ func TestCircuitBreakerManager_Stop(t *testing.T) {
 		t.Error("Expected context to be cancelled after stop")
 	}
 }
+
+func TestCircuitBreaker_ExecuteOpen(t *testing.T) {
+	logger.Init("debug")
+
+	config := CircuitBreakerConfig{
+		Name:             "test-breaker",
+		FailureThreshold: 3,
+		SuccessThreshold: 2,
+		Timeout:          1 * time.Hour, // Long timeout to avoid triggering half-open
+		WindowSize:       1 * time.Minute,
+	}
+
+	cb := NewCircuitBreaker(config)
+
+	// Force circuit to open state
+	cb.ForceOpen()
+
+	// Manually set lastFailureTime to a recent time to avoid triggering half-open
+	cb.mutex.Lock()
+	cb.lastFailureTime = time.Now() // Set to now to avoid timeout
+	cb.mutex.Unlock()
+
+	// Test executeOpen when circuit is open and timeout hasn't elapsed
+	err := cb.executeOpen()
+	if err == nil {
+		t.Error("Expected error when circuit is open and timeout hasn't elapsed")
+	}
+
+	// Verify the error message contains expected text for open circuit
+	errorMsg := err.Error()
+	if !contains(errorMsg, "circuit breaker is open") {
+		t.Errorf("Expected error message to contain 'circuit breaker is open', got: %s", errorMsg)
+	}
+
+	// Verify the error message contains the circuit breaker name
+	if !contains(errorMsg, "test-breaker") {
+		t.Errorf("Expected error message to contain circuit breaker name 'test-breaker', got: %s", errorMsg)
+	}
+}
+
+func TestCircuitBreaker_HalfOpenCircuit(t *testing.T) {
+	logger.Init("debug")
+
+	config := CircuitBreakerConfig{
+		Name:             "test-breaker",
+		FailureThreshold: 3,
+		SuccessThreshold: 2,
+		Timeout:          1 * time.Second,
+		WindowSize:       1 * time.Minute,
+	}
+
+	cb := NewCircuitBreaker(config)
+
+	// Start with closed state
+	if cb.GetState() != StateClosed {
+		t.Errorf("Expected initial state %d, got %d", StateClosed, cb.GetState())
+	}
+
+	// Test halfOpenCircuit
+	cb.halfOpenCircuit()
+
+	// Verify state changed to half-open
+	if cb.GetState() != StateHalfOpen {
+		t.Errorf("Expected state %d after halfOpenCircuit, got %d", StateHalfOpen, cb.GetState())
+	}
+
+	// Verify counters are reset
+	if cb.failureCount != 0 {
+		t.Errorf("Expected failure count to be reset to 0, got %d", cb.failureCount)
+	}
+
+	if cb.successCount != 0 {
+		t.Errorf("Expected success count to be reset to 0, got %d", cb.successCount)
+	}
+
+	// Verify stats are updated
+	stats := cb.GetStats()
+	if stats.CircuitHalfOpens != 1 {
+		t.Errorf("Expected 1 circuit half-open, got %d", stats.CircuitHalfOpens)
+	}
+
+	// Test halfOpenCircuit again (should not change state if already half-open)
+	cb.halfOpenCircuit()
+
+	// Verify state is still half-open
+	if cb.GetState() != StateHalfOpen {
+		t.Errorf("Expected state to remain %d, got %d", StateHalfOpen, cb.GetState())
+	}
+
+	// Verify stats are not incremented again
+	stats = cb.GetStats()
+	if stats.CircuitHalfOpens != 1 {
+		t.Errorf("Expected 1 circuit half-open (not incremented), got %d", stats.CircuitHalfOpens)
+	}
+}
