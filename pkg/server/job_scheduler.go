@@ -103,7 +103,7 @@ func (js *JobScheduler) AddJob(id, name string, schedule time.Duration, handler 
 	}
 
 	js.jobs[id] = job
-	js.updateStats(0, true) // Job scheduled
+	js.updateScheduledStats() // Job scheduled
 
 	logger.Info("Added scheduled job %s (%s) with schedule %v", id, name, schedule)
 	return nil
@@ -228,6 +228,9 @@ func (js *JobScheduler) executeJob(job *ScheduledJob) {
 	if err != nil {
 		logger.Error("Scheduled job %s failed: %v", job.ID, err)
 
+		// Update failure stats immediately
+		js.updateStats(time.Since(startTime), false)
+
 		// Handle retries
 		if job.RetryCount < job.MaxRetries {
 			job.RetryCount++
@@ -238,7 +241,6 @@ func (js *JobScheduler) executeJob(job *ScheduledJob) {
 			job.NextRun = time.Now().Add(retryDelay)
 		} else {
 			logger.Error("Scheduled job %s failed after %d retries", job.ID, job.MaxRetries)
-			js.updateStats(time.Since(startTime), false)
 		}
 	} else {
 		job.RetryCount = 0 // Reset retry count on success
@@ -258,6 +260,13 @@ func (js *JobScheduler) updateStats(duration time.Duration, success bool) {
 	} else {
 		js.stats.TotalJobsFailed++
 	}
+}
+
+// updateScheduledStats updates the scheduled jobs count
+func (js *JobScheduler) updateScheduledStats() {
+	js.statsMutex.Lock()
+	defer js.statsMutex.Unlock()
+	js.stats.TotalJobsScheduled++
 }
 
 // GetStats returns scheduler statistics
@@ -286,7 +295,14 @@ func (js *JobScheduler) Stop() {
 		js.ticker.Stop()
 	}
 
-	close(js.stopChan)
+	// Use select to avoid closing already closed channel
+	select {
+	case <-js.stopChan:
+		// Channel already closed
+	default:
+		close(js.stopChan)
+	}
+
 	js.cancel()
 
 	js.mutex.Lock()
