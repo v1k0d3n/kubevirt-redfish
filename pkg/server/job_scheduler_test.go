@@ -490,9 +490,9 @@ func TestJobScheduler_AddDefaultJobs(t *testing.T) {
 
 	// Create a mock server
 	server := &Server{
-		responseCache:       NewCache(100, 1*time.Hour),
-		enhancedTaskManager: NewEnhancedTaskManager(5, nil), // 5 workers, nil client for test
-		kubevirtClient:      nil,                            // Will be nil for this test
+		responseCache:  NewCache(100, 1*time.Hour),
+		taskManager:    NewTaskManager(5, nil), // 5 workers, nil client for test
+		kubevirtClient: nil,                    // Will be nil for this test
 	}
 
 	// Add default jobs

@@ -338,8 +338,8 @@ func (js *JobScheduler) AddDefaultJobs(server *Server) error {
 		"Task Cleanup",
 		1*time.Hour, // Every hour
 		func() error {
-			if server.enhancedTaskManager != nil {
-				server.enhancedTaskManager.CleanupOldTasks(24 * time.Hour)
+			if server.taskManager != nil {
+				server.taskManager.CleanupOldTasks(24 * time.Hour)
 			}
 			return nil
 		},

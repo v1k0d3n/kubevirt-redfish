@@ -75,7 +75,7 @@ type Server struct {
 	enhancedAuthMiddleware *auth.EnhancedMiddleware // Enhanced authentication
 	securityHandlers       *SecurityHandlers        // Security monitoring endpoints
 	httpServer             *http.Server
-	enhancedTaskManager    *EnhancedTaskManager
+	taskManager            *TaskManager
 	useEnhancedAuth        bool // Flag to enable enhanced authentication
 	jobScheduler           *JobScheduler
 	memoryManager          *MemoryManager
@@ -112,7 +112,7 @@ func NewServer(config *config.Config, kubevirtClient *kubevirt.Client) *Server {
 	securityHandlers := NewSecurityHandlers(enhancedAuthMiddleware)
 
 	// Initialize enhanced task manager
-	enhancedTaskManager := NewEnhancedTaskManager(4, kubevirtClient) // 4 workers for background processing
+	taskManager := NewTaskManager(4, kubevirtClient) // 4 workers for background processing
 
 	// Initialize job scheduler
 	jobScheduler := NewJobScheduler()
@@ -155,7 +155,7 @@ func NewServer(config *config.Config, kubevirtClient *kubevirt.Client) *Server {
 		kubevirtClient:         kubevirtClient,
 		enhancedAuthMiddleware: enhancedAuthMiddleware,
 		securityHandlers:       securityHandlers,
-		enhancedTaskManager:    enhancedTaskManager,
+		taskManager:            taskManager,
 		useEnhancedAuth:        true, // Enable enhanced authentication
 		jobScheduler:           jobScheduler,
 		memoryManager:          memoryManager,
@@ -215,8 +215,8 @@ func (s *Server) Shutdown() error {
 	logger.Info("Shutting down server...")
 
 	// Stop the enhanced task manager
-	if s.enhancedTaskManager != nil {
-		s.enhancedTaskManager.Stop()
+	if s.taskManager != nil {
+		s.taskManager.Stop()
 	}
 
 	// Stop the job scheduler
@@ -453,17 +453,17 @@ func (s *Server) getAuthMiddleware() *auth.EnhancedMiddleware {
 
 // getTaskManager returns the enhanced task manager
 func (s *Server) getTaskManager() interface{} {
-	return s.enhancedTaskManager
+	return s.taskManager
 }
 
 // getTaskManagerForCreation returns the enhanced task manager for creating tasks
 func (s *Server) getTaskManagerForCreation() interface{} {
-	return s.enhancedTaskManager
+	return s.taskManager
 }
 
 // getTaskManagerForRetrieval returns the enhanced task manager for retrieving tasks
 func (s *Server) getTaskManagerForRetrieval() interface{} {
-	return s.enhancedTaskManager
+	return s.taskManager
 }
 
 // handleServiceRoot handles the Redfish service root endpoint.
@@ -1140,10 +1140,10 @@ func (s *Server) handleInsertVirtualMedia(w http.ResponseWriter, r *http.Request
 
 	// Create a task for this operation
 	taskName := fmt.Sprintf("Insert Media %s for VM %s", mediaID, systemName)
-	taskID := s.enhancedTaskManager.CreateTask(taskName, chassisConfig.Namespace, systemName, internalMediaID, insertRequest.Image)
+	taskID := s.taskManager.CreateTask(taskName, chassisConfig.Namespace, systemName, internalMediaID, insertRequest.Image)
 
 	// Return the task resource with 202 Accepted status
-	task, exists := s.enhancedTaskManager.GetTask(taskID)
+	task, exists := s.taskManager.GetTask(taskID)
 	if !exists {
 		logger.Error("Task %s not found after creation", taskID)
 		s.sendInternalError(w, "Failed to create task")
@@ -1560,7 +1560,7 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get task from enhanced task manager
-	task, exists := s.enhancedTaskManager.GetTask(taskID)
+	task, exists := s.taskManager.GetTask(taskID)
 
 	if !exists {
 		s.sendNotFound(w, "Task not found")
@@ -1703,7 +1703,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	cacheStats := s.responseCache.GetStats()
 
 	// Get task manager statistics
-	taskManagerStats := s.enhancedTaskManager.GetStats()
+	taskManagerStats := s.taskManager.GetStats()
 
 	// Get job scheduler statistics
 	schedulerStats := s.jobScheduler.GetStats()
