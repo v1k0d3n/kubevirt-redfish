@@ -1,0 +1,50 @@
+{{- if .Values.configMap.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.configMap.name }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "kubevirt-redfish.labels" . | nindent 4 }}
+    {{- with .Values.configMap.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.configMap.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  config.yaml: |
+    server:
+      host: "{{ .Values.server.host }}"
+      port: {{ .Values.server.port }}
+      tls:
+        enabled: {{ .Values.server.tls.enabled }}
+
+    chassis:
+    {{- range .Values.chassis }}
+      - name: "{{ .name }}"
+        namespace: "{{ .namespace }}"
+        service_account: "{{ .service_account }}"
+        description: "{{ .description }}"
+    {{- end }}
+
+    authentication:
+      users:
+    {{- range .Values.authentication.users }}
+        - username: "{{ .username }}"
+          password: "{{ .password }}"
+          chassis: [{{- range .chassis }}"{{ . }}",{{- end }}]
+    {{- end }}
+
+    kubevirt:
+      api_version: "{{ .Values.kubevirt.api_version }}"
+      timeout: {{ .Values.kubevirt.timeout }}
+
+    datavolume:
+      storage_size: "{{ .Values.datavolume.storage_size }}"
+      allow_insecure_tls: {{ .Values.datavolume.allow_insecure_tls }}
+      storage_class: "{{ .Values.datavolume.storage_class }}"
+      vm_update_timeout: "{{ .Values.datavolume.vm_update_timeout }}"
+      iso_download_timeout: "{{ .Values.datavolume.iso_download_timeout }}"
+{{- end }} 

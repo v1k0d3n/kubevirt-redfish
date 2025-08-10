@@ -1,0 +1,234 @@
+# Example values for kubevirt-redfish
+# This file shows how to configure the application for your environment
+# 
+# To deploy with this configuration:
+# helm install kubevirt-redfish ./helm -f helm/values-example.yaml
+
+# =============================================================================
+# GLOBAL CONFIGURATION
+# =============================================================================
+
+global:
+  namespace: "kubevirt-redfish"
+  image:
+    repository: "quay.io/your-org/kubevirt-redfish"
+    tag: "v0.2.0"
+    pullPolicy: "Always"
+
+# =============================================================================
+# DEPLOYMENT CONFIGURATION
+# =============================================================================
+
+deployment:
+  replicas: 1
+  container:
+    name: "kubevirt-redfish"
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "100m"
+      limits:
+        memory: "2Gi"
+        cpu: "500m"
+    env:
+      CONFIG_PATH: "/app/config/config.yaml"
+      LOG_LEVEL: "debug"
+      REDFISH_LOG_LEVEL: "DEBUG"
+      REDFISH_LOGGING_ENABLED: "true"
+    ports:
+      - name: "http"
+        containerPort: 8443
+        protocol: "TCP"
+    livenessProbe:
+      httpGet:
+        path: "/redfish/v1/"
+        port: 8443
+        scheme: "HTTP"
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readinessProbe:
+      httpGet:
+        path: "/redfish/v1/"
+        port: 8443
+        scheme: "HTTP"
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 3
+    volumeMounts:
+      - name: "config-volume"
+        mountPath: "/app/config"
+        readOnly: true
+      - name: "temp-storage"
+        mountPath: "/tmp"
+        readOnly: false
+
+# =============================================================================
+# SERVICE CONFIGURATION
+# =============================================================================
+
+service:
+  enabled: true
+  type: "ClusterIP"
+  ports:
+    - name: "http"
+      port: 8443
+      targetPort: 8443
+      protocol: "TCP"
+
+# =============================================================================
+# ROUTE CONFIGURATION (OpenShift)
+# =============================================================================
+
+route:
+  enabled: true
+  host: "kubevirt-redfish-default.apps.clustername.example.com"
+  tls:
+    termination: "edge"
+    insecureEdgeTerminationPolicy: "Redirect"
+
+# =============================================================================
+# RBAC CONFIGURATION
+# =============================================================================
+
+rbac:
+  enabled: true
+  serviceAccount:
+    create: true
+    name: "kubevirt-redfish"
+  clusterRole:
+    create: true
+    name: "kubevirt-redfish-role"
+  clusterRoleBinding:
+    create: true
+    name: "kubevirt-redfish-binding"
+
+  # OpenShift Security Context Constraints
+  scc:
+    # Enable/disable SCC functionality (enabled by default)
+    # When enabled, automatically detects OpenShift and applies appropriate SCC
+    enabled: true
+    # Enable/disable custom SCC creation (disabled by default)
+    # Set to true only if you need a custom SCC (not recommended)
+    # Most users should use OpenShift's built-in 'restricted' SCC instead
+    custom: false
+    # Custom SCC name (only used if custom: true)
+    customName: "kubevirt-redfish-scc"
+    labels: {}
+    annotations: {}
+    priority: 10
+    runAsUser:
+      min: 1000000000
+      max: 1000099999
+    fsGroup:
+      min: 1000000000
+      max: 1000099999
+    supplementalGroups:
+      min: 1000000000
+      max: 1000099999
+
+# =============================================================================
+# KUBEVIRT CONFIGURATION
+# =============================================================================
+
+kubevirt:
+  api_version: "v1"
+  timeout: 30
+
+# =============================================================================
+# SERVER CONFIGURATION
+# =============================================================================
+
+server:
+  host: "0.0.0.0"
+  port: 8443
+  tls:
+    enabled: false
+
+# =============================================================================
+# CHASSIS CONFIGURATION
+# =============================================================================
+
+chassis:
+  - name: "chassis-0"
+    namespace: "namespace-0"
+    service_account: "kubevirt-redfish"
+    description: "My KVM cluster with test VMs"
+  - name: "chassis-1"
+    namespace: "namespace-1"
+    service_account: "kubevirt-redfish"
+    description: "My KVM cluster with test VMs"
+
+
+# =============================================================================
+# AUTHENTICATION CONFIGURATION
+# =============================================================================
+
+authentication:
+  users:
+    - username: "admin"
+      password: "changeme"  # CHANGE THIS PASSWORD!
+      chassis: ["chassis-0"]
+    - username: "user"
+      password: "changeme"  # CHANGE THIS PASSWORD!
+      chassis: ["chassis-1"]
+
+# =============================================================================
+# DATAVOLUME CONFIGURATION
+# =============================================================================
+
+datavolume:
+  storage_size: "3Gi"
+  allow_insecure_tls: true
+  storage_class: "lvms-vg1"
+  vm_update_timeout: "2m"
+  iso_download_timeout: "30m"
+
+# =============================================================================
+# VOLUMES CONFIGURATION
+# =============================================================================
+
+volumes:
+  config:
+    name: "config-volume"
+    configMap:
+      name: "kubevirt-redfish-config"
+  
+  temp:
+    name: "temp-storage"
+    emptyDir:
+      sizeLimit: "50Gi"
+
+# =============================================================================
+# CONFIGMAP CONFIGURATION
+# =============================================================================
+
+configMap:
+  enabled: true
+  name: "kubevirt-redfish-config"
+
+# =============================================================================
+# SECURITY CONTEXT
+# =============================================================================
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+# =============================================================================
+# PLACEMENT CONFIGURATION
+# =============================================================================
+
+nodeSelector: {}
+tolerations: []
+affinity: {} 

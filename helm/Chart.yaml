@@ -1,0 +1,18 @@
+apiVersion: v2
+name: kubevirt-redfish
+description: A Helm chart that provides a Redfish API server for KubeVirt VMs
+type: application
+version: 0.0.0-0.2.0-f310b659
+appVersion: "v0.2.0"
+keywords:
+  - kubevirt
+  - redfish
+  - virtualization
+  - api
+home: https://github.com/kubevirt/kubevirt-redfish
+sources:
+  - https://github.com/kubevirt/kubevirt-redfish
+maintainers:
+  - name: Brandon B. Jozsa
+    email: bjozsa@redhat.com
+icon: https://raw.githubusercontent.com/kubevirt/kubevirt/main/logo/kubevirt-logo.png

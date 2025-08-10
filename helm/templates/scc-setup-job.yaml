@@ -1,0 +1,81 @@
+{{- if .Values.rbac.scc.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "kubevirt-redfish.fullname" . }}-scc-setup
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "kubevirt-redfish.labels" . | nindent 4 }}
+    app.kubernetes.io/component: "scc-setup"
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    metadata:
+      labels:
+        {{- include "kubevirt-redfish.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: "scc-setup"
+    spec:
+      serviceAccountName: {{ include "kubevirt-redfish.serviceAccountName" . }}
+      restartPolicy: Never
+      containers:
+      - name: scc-setup
+        image: "{{ .Values.global.image.repository }}:{{ .Values.global.image.tag }}"
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          echo "Starting SCC setup for OpenShift..."
+          
+          # Wait for the service account to be created
+          sleep 5
+          
+          # Check if we're on OpenShift
+          if oc version --client 2>/dev/null; then
+            echo "OpenShift detected, configuring SCC..."
+            
+            # Try restricted SCC first (most secure)
+            if oc adm policy add-scc-to-user restricted -z {{ include "kubevirt-redfish.serviceAccountName" . }} -n {{ .Values.global.namespace }} 2>/dev/null; then
+              echo "Successfully applied restricted SCC"
+              exit 0
+            else
+              echo "Restricted SCC failed, trying custom SCC..."
+              
+                             # Try custom SCC if available
+               if oc get scc {{ .Values.rbac.scc.customName }} 2>/dev/null; then
+                 if oc adm policy add-scc-to-user {{ .Values.rbac.scc.customName }} -z {{ include "kubevirt-redfish.serviceAccountName" . }} -n {{ .Values.global.namespace }} 2>/dev/null; then
+                   echo "Successfully applied custom SCC: {{ .Values.rbac.scc.customName }}"
+                  exit 0
+                fi
+              fi
+              
+              echo "Custom SCC failed, trying anyuid as last resort..."
+              
+              # Last resort: anyuid
+              if oc adm policy add-scc-to-user anyuid -z {{ include "kubevirt-redfish.serviceAccountName" . }} -n {{ .Values.global.namespace }} 2>/dev/null; then
+                echo "Successfully applied anyuid SCC (least secure)"
+                exit 0
+              else
+                echo "Failed to apply any SCC. Manual intervention required."
+                exit 1
+              fi
+            fi
+          else
+            echo "Not on OpenShift, skipping SCC setup"
+            exit 0
+          fi
+        env:
+        - name: NAMESPACE
+          value: "{{ .Values.global.namespace }}"
+        - name: SERVICE_ACCOUNT
+          value: "{{ include "kubevirt-redfish.serviceAccountName" . }}"
+                 - name: SCC_NAME
+           value: "{{ .Values.rbac.scc.customName }}"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000000001
+        runAsGroup: 1000000001
+        fsGroup: 1000000001
+{{- end }} 

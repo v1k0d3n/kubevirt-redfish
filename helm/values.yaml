@@ -1,0 +1,442 @@
+# Default values for kubevirt-redfish
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+#
+# This file contains all configurable parameters for the KubeVirt Redfish API server.
+# The server provides a Redfish-compliant API interface for managing KubeVirt virtual machines
+# in Kubernetes/OpenShift clusters, enabling integration with tools like Metal3/Ironic
+# for bare metal provisioning workflows.
+
+# =============================================================================
+# GLOBAL CONFIGURATION
+# =============================================================================
+
+global:
+  # The namespace you what the kubevirt-redfish service to be deployed (typically leave this as is, creating the namespsace with the Helm install command)
+  namespace: "kubevirt-redfish"
+  
+  # The container image used for kubevirt-redfish (typically leave this as is, using the default image)
+  image:
+    repository: "quay.io/your-org/kubevirt-redfish"
+    tag: "v0.2.0"
+    pullPolicy: "Always"
+
+# =============================================================================
+# DEPLOYMENT CONFIGURATION
+# =============================================================================
+
+deployment:
+  # Only 1 replica is needed/required for kubevirt-redfish
+  replicas: 1
+  labels: {}
+  container:
+    name: "kubevirt-redfish"
+
+    # Resource allocation (do not change these settings unless you're testing or debugging)
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "100m"
+      limits:
+        memory: "2Gi"
+        cpu: "500m"
+
+    # Environment variables
+    # These are typically not overridden unless you're testing or debugging
+    env:
+      # Path to the configuration file within the pod container
+      CONFIG_PATH: "/app/config/config.yaml"
+      
+      # Log level for the application (typically used for debugging and application troubleshooting)
+      # Options: debug, info, warn, error
+      LOG_LEVEL: "info"
+      
+      # Redfish-specific log level (typically used to see Redfish API calls and responses)
+      # Options: DEBUG, INFO, WARN, ERROR
+      REDFISH_LOG_LEVEL: "INFO"
+      
+      # Enable/disable structured logging (defaults to "true" for better log handling)
+      REDFISH_LOGGING_ENABLED: "true"
+    
+    # Port configuration (do not change these settings unless you're testing or debugging)
+    ports:
+      - name: "http"
+        containerPort: 8443
+        protocol: "TCP"
+    
+    # Health checks for Kubernetes liveness probe (do not change these settings unless you're testing or debugging)
+    livenessProbe:
+      httpGet:
+        path: "/redfish/v1/"
+        port: 8443
+        scheme: "HTTP"
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+    
+    # Health checks for Kubernetes readiness probe (do not change these settings unless you're testing or debugging)
+    readinessProbe:
+      httpGet:
+        path: "/redfish/v1/"
+        port: 8443
+        scheme: "HTTP"
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 3
+    
+    # Volume mounts for configuration and temporary storage (do not change these settings unless you're testing or debugging)
+    volumeMounts:
+      - name: "config-volume"
+        mountPath: "/app/config"
+        readOnly: true
+      - name: "temp-storage"
+        mountPath: "/tmp"
+        readOnly: false
+
+# =============================================================================
+# SERVICE CONFIGURATION
+# =============================================================================
+
+service:
+  # Enable/disable service creation
+  enabled: true
+  
+  # Service type
+  # Options: ClusterIP, NodePort, LoadBalancer (do not change if using OpenShift - as this is the default in combination with the route)
+  type: "ClusterIP"
+  
+  # Service ports (do not change these settings unless you're testing or debugging)
+  ports:
+    - name: "http"
+      port: 8443
+      targetPort: 8443
+      protocol: "TCP"
+  
+  # Additional labels for the service (no need to change these settings unless you're testing or debugging)
+  labels: {}
+  
+  # Additional annotations for the service (no need to change these settings unless you're testing or debugging)
+  annotations: {}
+
+# =============================================================================
+# ROUTE CONFIGURATION (OpenShift)
+# =============================================================================
+
+route:
+  # Enable/disable OpenShift route creation
+  # Set to false if not deploying on OpenShift (no need to change this setting unless you're not using OpenShift)
+  enabled: true
+  
+  # Route hostname
+  # This should be a valid hostname that resolves to your OpenShift cluster (you will need to change this setting to match your OpenShift environment )
+  host: "kubevirt-redfish-default.apps.clustername.example.com"
+  
+  # Additional labels for the route (no need to change these settings unless you're testing or debugging)
+  labels: {}
+  
+  # Additional annotations for the route (no need to change these settings unless you're testing or debugging)
+  annotations: {}
+  
+  # TLS configuration for the route
+  tls:
+    # TLS termination type (do not change these settings unless you're testing or debugging)
+    # Options: edge, passthrough, reencrypt
+    termination: "edge"
+    
+    # Insecure edge termination policy (do not change these settings unless you're testing or debugging)
+    # Options: Allow, Disable, Redirect
+    insecureEdgeTerminationPolicy: "Redirect"
+
+# =============================================================================
+# RBAC CONFIGURATION
+# =============================================================================
+
+rbac:
+  # Enable/disable RBAC resources creation
+  enabled: true
+  
+  # ServiceAccount configuration
+  serviceAccount:
+    # Create a new ServiceAccount
+    create: true
+    
+    # ServiceAccount name
+    name: "kubevirt-redfish"
+    
+    # Additional labels for the ServiceAccount
+    labels: {}
+    
+    # Additional annotations for the ServiceAccount
+    annotations: {}
+  
+  # ClusterRole configuration
+  clusterRole:
+    # Create a new ClusterRole
+    create: true
+    
+    # ClusterRole name
+    name: "kubevirt-redfish-role"
+    
+    # Additional labels for the ClusterRole
+    labels: {}
+  
+  # ClusterRoleBinding configuration
+  clusterRoleBinding:
+    # Create a new ClusterRoleBinding
+    create: true
+    
+    # ClusterRoleBinding name
+    name: "kubevirt-redfish-binding"
+    
+    # Additional labels for the ClusterRoleBinding
+    labels: {}
+  
+  # Security Context Constraints (OpenShift only)
+  scc:
+    # Enable/disable SCC functionality (enabled by default)
+    # When enabled, automatically detects OpenShift and applies appropriate SCC
+    enabled: true
+    
+    # Enable/disable custom SCC creation (disabled by default)
+    # Set to true only if you need a custom SCC (not recommended)
+    # Most users should use OpenShift's built-in 'restricted' SCC instead
+    custom: false
+    
+    # Custom SCC name (only used if custom: true)
+    customName: "kubevirt-redfish-scc"
+    
+    # Additional labels for the SCC
+    labels: {}
+    
+    # Additional annotations for the SCC
+    annotations: {}
+    
+    # Priority (higher numbers = higher priority)
+    priority: 10
+    
+    # User ID range for the SCC
+    runAsUser:
+      min: 1000000000
+      max: 1000099999
+    
+    # File system group range
+    fsGroup:
+      min: 1000000000
+      max: 1000099999
+    
+    # Supplemental groups range
+    supplementalGroups:
+      min: 1000000000
+      max: 1000099999
+
+# =============================================================================
+# SERVER CONFIGURATION
+# =============================================================================
+
+server:
+  # Server host binding
+  host: "0.0.0.0"
+  
+  # Server port
+  port: 8443
+  
+  # TLS configuration
+  tls:
+    # Enable/disable TLS
+    # Note: In production, you should enable TLS and provide proper certificates
+    enabled: false
+
+# =============================================================================
+# CHASSIS CONFIGURATION
+# =============================================================================
+
+# Chassis configuration defines the virtual "chassis" that the Redfish API will expose
+# Each chassis represents a logical grouping of VMs, typically corresponding to a namespace
+chassis:
+  - name: "default"
+    namespace: "default"
+    service_account: "kubevirt-redfish"
+    description: "Default KubeVirt chassis with virtual machines"
+
+# =============================================================================
+# AUTHENTICATION CONFIGURATION
+# =============================================================================
+
+# Authentication configuration for Redfish API access
+# IMPORTANT: Change these credentials for production deployments!
+authentication:
+  users:
+    - username: "admin"
+      password: "admin123"
+      chassis: ["default"]
+    - username: "operator"
+      password: "operator123"
+      chassis: ["default"]
+
+# =============================================================================
+# KUBEVIRT CONFIGURATION
+# =============================================================================
+
+# KubeVirt-specific configuration
+kubevirt:
+  # KubeVirt API version
+  api_version: "v1"
+  
+  # Timeout for KubeVirt API operations (in seconds)
+  timeout: 30
+
+# =============================================================================
+# DATAVOLUME CONFIGURATION
+# =============================================================================
+
+# DataVolume configuration for virtual media operations
+datavolume:
+  # Storage size for ISO images
+  storage_size: "3Gi"
+  
+  # Allow insecure TLS for ISO downloads
+  # Set to false in production environments
+  allow_insecure_tls: true
+  
+  # Storage class for PVC creation
+  # Change this to match your cluster's available storage classes
+  storage_class: ""
+  
+  # Timeout for VM update operations
+  vm_update_timeout: "2m"
+  
+  # Timeout for ISO download operations
+  iso_download_timeout: "30m"
+
+# =============================================================================
+# VOLUMES CONFIGURATION
+# =============================================================================
+
+# Volume configuration for the deployment
+volumes:
+  # Configuration volume (ConfigMap)
+  config:
+    name: "config-volume"
+    configMap:
+      name: "kubevirt-redfish-config"
+  
+  # Temporary storage volume
+  temp:
+    name: "temp-storage"
+    emptyDir:
+      sizeLimit: "50Gi"
+
+# =============================================================================
+# CONFIGMAP CONFIGURATION
+# =============================================================================
+
+# ConfigMap configuration for application settings
+configMap:
+  # Enable/disable ConfigMap creation
+  enabled: true
+  
+  # ConfigMap name
+  name: "kubevirt-redfish-config"
+  
+  # Additional labels for the ConfigMap
+  labels: {}
+  
+  # Additional annotations for the ConfigMap
+  annotations: {}
+
+# =============================================================================
+# SECURITY CONTEXT
+# =============================================================================
+
+# Security context for the container
+securityContext:
+  # Run as non-root user
+  runAsNonRoot: true
+  
+  # User ID to run as (OpenShift compatible)
+  # Note: For OpenShift, use UIDs in range 1000000000-1000099999
+  runAsUser: 1000000001
+  
+  # Group ID to run as (OpenShift compatible)
+  runAsGroup: 1000000001
+  
+  # File system group ID (OpenShift compatible)
+  fsGroup: 1000000001
+
+# Pod security context
+podSecurityContext:
+  # Run as non-root user
+  runAsNonRoot: true
+  
+  # User ID to run as (OpenShift compatible)
+  # Note: For OpenShift, use UIDs in range 1000000000-1000099999
+  runAsUser: 1000000001
+  
+  # Group ID to run as (OpenShift compatible)
+  runAsGroup: 1000000001
+  
+  # File system group ID (OpenShift compatible)
+  fsGroup: 1000000001
+
+# =============================================================================
+# PLACEMENT CONFIGURATION
+# =============================================================================
+
+# Node selector for pod placement
+# Use this to target specific nodes in your cluster
+nodeSelector: {}
+
+# Tolerations for pod placement
+# Use this to allow pods to be scheduled on tainted nodes
+tolerations: []
+
+# Affinity rules for pod placement
+# Use this to control where pods are scheduled
+affinity: {}
+
+# =============================================================================
+# NOTES AND EXAMPLES
+# =============================================================================
+
+# Example configurations for different environments:
+#
+# 1. Production deployment with high availability:
+#    deployment:
+#      replicas: 3
+#    service:
+#      type: LoadBalancer
+#    authentication:
+#      users:
+#        - username: "admin"
+#          password: "your-secure-password"
+#          chassis: ["production"]
+#
+# 2. Development deployment:
+#    deployment:
+#      replicas: 1
+#    authentication:
+#      users:
+#        - username: "dev"
+#          password: "dev123"
+#          chassis: ["dev"]
+#    datavolume:
+#      allow_insecure_tls: true
+#
+# 3. Multi-tenant deployment:
+#    chassis:
+#      - name: "tenant1"
+#        namespace: "tenant1-namespace"
+#        description: "Tenant 1 VMs"
+#      - name: "tenant2"
+#        namespace: "tenant2-namespace"
+#        description: "Tenant 2 VMs"
+#    authentication:
+#      users:
+#        - username: "tenant1-admin"
+#          password: "tenant1-pass"
+#          chassis: ["tenant1"]
+#        - username: "tenant2-admin"
+#          password: "tenant2-pass"
+#          chassis: ["tenant2"] 

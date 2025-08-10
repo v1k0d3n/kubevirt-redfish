@@ -1,0 +1,75 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+kubevirt-redfish
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# MacOS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+
+# Configuration files with sensitive data
+config-*.yaml
+*.env
+
+# Build artifacts
+build/
+dist/
+
+# Temporary files
+tmp/
+temp/
+
+# Certificate files
+*.crt
+*.key
+*.pem
+
+# Kubernetes secrets
+*-secret.yaml
+
+# =============================================================================
+# ENVIRONMENT-SPECIFIC FILES (DO NOT COMMIT TO GITHUB)
+# =============================================================================
+
+# Any possible testing or production based files that may contain sensitive data
+deploy/*
+testing/*
+helm/values-*production*.yaml
+
+# Kubeconfig files
+kubeconfig-*.yaml
+*kubeconfig*.yaml
+
+# Backup/copy files
+* copy.yaml
+* copy.yml 

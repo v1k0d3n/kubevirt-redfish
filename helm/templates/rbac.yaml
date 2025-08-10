@@ -1,0 +1,88 @@
+{{- if .Values.rbac.enabled }}
+---
+{{- if .Values.rbac.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "kubevirt-redfish.serviceAccountName" . }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "kubevirt-redfish.labels" . | nindent 4 }}
+    {{- with .Values.rbac.serviceAccount.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.rbac.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+---
+{{- if .Values.rbac.clusterRole.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Values.rbac.clusterRole.name }}
+  labels:
+    {{- include "kubevirt-redfish.labels" . | nindent 4 }}
+    {{- with .Values.rbac.clusterRole.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+rules:
+  # KubeVirt permissions
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachines", "virtualmachineinstances"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachines/status", "virtualmachineinstances/status"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachines/restart", "virtualmachines/start", "virtualmachines/stop"]
+    verbs: ["create"]
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachineinstances/pause", "virtualmachineinstances/unpause"]
+    verbs: ["create"]
+  - apiGroups: ["subresources.kubevirt.io"]
+    resources: ["virtualmachineinstances/pause", "virtualmachineinstances/unpause"]
+    verbs: ["create", "update"]
+  # Core Kubernetes permissions
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+  # Storage permissions for virtual media
+  - apiGroups: ["cdi.kubevirt.io"]
+    resources: ["datavolumes", "volumeimportsources"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list"]
+{{- end }}
+---
+{{- if .Values.rbac.clusterRoleBinding.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Values.rbac.clusterRoleBinding.name }}
+  labels:
+    {{- include "kubevirt-redfish.labels" . | nindent 4 }}
+    {{- with .Values.rbac.clusterRoleBinding.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Values.rbac.clusterRole.name }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "kubevirt-redfish.serviceAccountName" . }}
+  namespace: {{ .Values.global.namespace }}
+{{- end }}
+{{- end }} 

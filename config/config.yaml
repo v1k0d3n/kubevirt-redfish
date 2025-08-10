@@ -1,0 +1,48 @@
+# KubeVirt Redfish Configuration
+kubevirt:
+  api_version: "v1"                                 # Kubevirt API version (v1 is default (typically unchanged unless testing)
+  timeout: 30                                       # Timeout for Kubevirt API calls (30 seconds is default (typically unchanged unless testing)
+
+server:
+  host: "0.0.0.0"                                   # Host for the Redfish server (0.0.0.0 is default (typically unchanged unless testing)
+  port: 8443                                        # Port for the Redfish server (8443 is default (typically unchanged unless testing)
+  tls:
+    enabled: false                                  # Disabled for development/testing (not required with OpenShift because of default route TLS)
+    cert_file: "/etc/kubevirt-redfish/tls/tls.crt"  # Path to the certificate file (not required with OpenShift, but may be leveraged for other platforms)
+    key_file: "/etc/kubevirt-redfish/tls/tls.key"   # Path to the key file (not required with OpenShift, but may be leveraged for other platforms)
+
+chassis:
+  - name: "chassis-0"                               # Name you want the Redfish chassis to be called for a given namespace
+    namespace: "namespace-0"                        # Namespace that corresponds to the Redfish chassis above
+    service_account: "redfish-sa"                   # Service account that will be used to access the Redfish chassis
+    description: "namespace-0 with test VMs"        # Description for your Redfish chassis
+  - name: "chassis-1"                               # Name you want the Redfish chassis to be called for a given namespace
+    namespace: "namespace-1"                        # Namespace that corresponds to the Redfish chassis above
+    service_account: "redfish-sa"                   # Service account that will be used to access the Redfish chassis
+    description: "namespace-1 with test VMs"        # Description for your Redfish chassis
+
+authentication:
+  users:
+    - username: "admin"                             # Username for the Redfish chassis (chassis-0)
+      password: "admin123"                          # Password for the Redfish chassis (chassis-0)
+      chassis: ["chassis-0"]
+    - username: "user"                              # Username for the Redfish chassis (chassis-1)
+      password: "user123"                           # Password for the Redfish chassis (chassis-1)
+      chassis: ["chassis-1"]
+
+cdi:
+  upload_proxy:
+    service_name: "cdi-uploadproxy"                 # CDI upload proxy service name
+    namespaces:                                     # Namespaces to search for CDI upload proxy (in order)
+      - "openshift-cnv"                             # Standard OpenShift Virtualization namespace
+      - "cdi"                                       # Standard CDI namespace
+      - "kubevirt-cdi"                              # Alternative CDI namespace
+    port: 443                                       # CDI upload proxy port
+    timeout: 30                                     # Timeout for CDI operations (seconds)
+
+datavolume:
+  storage_size: "10Gi"                              # Storage size for ISO DataVolumes (10Gi is default / typically unchanged unless testing)
+  allow_insecure_tls: true                          # Allow self-signed certificates for ISO imports
+  storage_class: "lvms-vg1"                         # Storage class for ISO DataVolumes (will use default storageclass if not defined)
+  vm_update_timeout: "2m"                           # Timeout for VM spec updates
+  iso_download_timeout: "30m"                       # Timeout for ISO downloads (large files) 

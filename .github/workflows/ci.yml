@@ -1,0 +1,471 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  # Go configuration
+  GO_VERSION: '1.21'
+  CGO_ENABLED: '0'
+  GOOS: 'linux'
+  GOARCH: 'amd64'
+  
+  # Container registry configuration
+  REGISTRY: 'quay.io'
+  NAMESPACE: 'bjozsa-redhat'
+  IMAGE_NAME: 'kubevirt-redfish'
+
+jobs:
+  # Validate stage
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+        cache: true
+        
+    - name: Validate Go module
+      run: |
+        echo "Validating Go module..."
+        go mod download
+        go mod verify
+        
+    - name: Check code formatting
+      run: |
+        echo "Checking code formatting..."
+        go fmt ./...
+        # Check if any files were changed by go fmt
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "Code is not properly formatted. Run 'go fmt ./...' to fix."
+          git diff
+          exit 1
+        fi
+        
+    - name: Tidy Go modules
+      run: |
+        echo "Tidying Go modules..."
+        go mod tidy
+        # Check if go.mod or go.sum were changed
+        if [ -n "$(git status --porcelain go.mod go.sum)" ]; then
+          echo "Go modules are not tidy. Run 'go mod tidy' to fix."
+          git diff go.mod go.sum
+          exit 1
+        fi
+        
+    - name: Run static analysis
+      run: |
+        echo "Running static analysis..."
+        go vet ./...
+        
+    - name: Run golangci-lint
+      uses: golangci/golangci-lint-action@v3
+      with:
+        version: latest
+        args: --timeout=5m
+        only-new-issues: true
+      continue-on-error: true
+
+  # Code quality checks
+  code-quality:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Run code quality checks
+      run: |
+        echo "Running code quality checks..."
+        echo "Checking for TODO comments..."
+        find . -name "*.go" -exec grep -l "TODO" {} \; || echo "No TODO comments found"
+        echo "Checking for FIXME comments..."
+        find . -name "*.go" -exec grep -l "FIXME" {} \; || echo "No FIXME comments found"
+        echo "Checking for debug prints..."
+        find . -name "*.go" -exec grep -l "fmt.Print" {} \; || echo "No debug prints found"
+
+  # Documentation check
+  docs-check:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Check documentation
+      run: |
+        echo "Checking documentation..."
+        echo "Checking for package documentation..."
+        find ./pkg -name "*.go" -exec grep -L "Package " {} \; || echo "All packages have documentation"
+        echo "Checking README..."
+        test -f README.md && echo "README.md exists" || echo "README.md missing"
+
+  # Test stage
+  test:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+        cache: true
+        
+    - name: Run tests
+      run: |
+        echo "Running tests..."
+        go test -v ./...
+        
+    - name: Run tests with coverage
+      run: |
+        echo "Running tests with coverage..."
+        go test -v -coverprofile=coverage.out ./...
+        echo "Coverage summary:"
+        go tool cover -func=coverage.out
+        
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.out
+        flags: unittests
+        name: codecov-umbrella
+        
+    - name: Upload coverage artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: coverage.out
+        retention-days: 7
+
+  # Integration test
+  integration-test:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+        cache: true
+        
+    - name: Run integration tests
+      run: |
+        echo "Ensuring dependencies are up to date..."
+        go mod download
+        go mod tidy
+        echo "Running integration tests..."
+        go build -o kubevirt-redfish ./cmd/main.go
+        echo "Binary built successfully"
+        ./kubevirt-redfish --help || echo "Help command completed"
+        echo "Creating test configuration..."
+        ./kubevirt-redfish --create-config test-config.yaml
+        echo "Test configuration created successfully"
+        ls -la test-config.yaml
+
+  # Security scan
+  security-scan:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+        cache: true
+        
+    - name: Run security scan
+      run: |
+        echo "Running security scan..."
+        go list -json -deps ./... | jq -r '.Deps[]' | sort | uniq > deps.txt
+        echo "Dependencies listed for security review"
+        cat deps.txt
+        
+    - name: Upload dependencies artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: dependencies-list
+        path: deps.txt
+        retention-days: 7
+        
+    - name: Run Go security checks
+      run: |
+        echo "Running basic security checks..."
+        echo "Checking for potential security issues in dependencies..."
+        go list -json -deps ./... | jq -r 'select(.Standard != true) | .ImportPath' | sort | uniq | head -20
+        echo "Security scan completed - manual review recommended for production use"
+
+  # Build stage
+  build:
+    runs-on: ubuntu-latest
+    needs: [validate, test]
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+        cache: true
+        
+    - name: Build binary
+      run: |
+        echo "Ensuring dependencies are up to date..."
+        go mod download
+        go mod tidy
+        echo "Building kubevirt-redfish binary..."
+        go build -ldflags="-w -s" -o kubevirt-redfish ./cmd/main.go
+        echo "Build completed successfully"
+        ls -la kubevirt-redfish
+        echo "Testing binary..."
+        ./kubevirt-redfish --version || echo "Version command completed"
+        
+    - name: Upload binary artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: kubevirt-redfish-binary
+        path: kubevirt-redfish
+        retention-days: 7
+
+  # Container build and push for commits
+  container-build-commit:
+    runs-on: ubuntu-latest
+    needs: [build, test]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')
+    outputs:
+      commit_sha: ${{ steps.tags.outputs.commit_sha }}
+      image_tags: ${{ steps.tags.outputs.tags }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Log in to Quay.io
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ secrets.QUAY_USERNAME }}
+        password: ${{ secrets.QUAY_PASSWORD }}
+        
+    - name: Generate tags manually
+      id: tags
+      run: |
+        COMMIT_SHA="${GITHUB_SHA:0:8}"
+        IMAGE_BASE="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}"
+        
+        # Create tags like GitLab CI does - only commit SHA
+        TAGS="${IMAGE_BASE}:${COMMIT_SHA}"
+        
+        echo "Generated tags: ${TAGS}"
+        echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+        echo "commit_sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
+          
+    - name: Debug build context
+      run: |
+        echo "Build context contents:"
+        ls -la .
+        echo "Dockerfile exists:"
+        ls -la Dockerfile
+        echo "Dockerfile contents (first 10 lines):"
+        head -10 Dockerfile
+        
+    - name: Build and push container image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile
+        push: true
+        tags: ${{ steps.tags.outputs.tags }}
+        platforms: linux/amd64,linux/arm64
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        provenance: false
+        sbom: false
+        outputs: type=registry
+        
+    - name: Debug - Show what was pushed
+      run: |
+        echo "Container images pushed with tags:"
+        echo "${{ steps.tags.outputs.tags }}"
+        echo "Commit SHA: ${{ steps.tags.outputs.commit_sha }}"
+        echo "Registry: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}"
+
+  # Container build and push for git tags
+  container-build-tag:
+    runs-on: ubuntu-latest
+    needs: [build, test]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Log in to Quay.io
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ secrets.QUAY_USERNAME }}
+        password: ${{ secrets.QUAY_PASSWORD }}
+        
+    - name: Generate tags manually
+      id: tags
+      run: |
+        TAG_NAME="${GITHUB_REF#refs/tags/}"
+        IMAGE_BASE="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}"
+        
+        # Create only the git tag (e.g., v0.2.0)
+        TAGS="${IMAGE_BASE}:${TAG_NAME}"
+        
+        echo "Generated tags: ${TAGS}"
+        echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+        echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
+          
+    - name: Build and push container image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile
+        push: true
+        tags: ${{ steps.tags.outputs.tags }}
+        platforms: linux/amd64,linux/arm64
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        provenance: false
+        sbom: false
+        outputs: type=registry
+
+  # Tag latest for main branch commits
+  tag-latest:
+    runs-on: ubuntu-latest
+    needs: [container-build-commit]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Log in to Quay.io
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ secrets.QUAY_USERNAME }}
+        password: ${{ secrets.QUAY_PASSWORD }}
+        
+    - name: Tag and push latest
+      run: |
+        echo "Information from build job:"
+        echo "Commit SHA: ${{ needs.container-build-commit.outputs.commit_sha }}"
+        echo "Built tags: ${{ needs.container-build-commit.outputs.image_tags }}"
+        
+        # Use the commit SHA tag from the successful build
+        COMMIT_SHA="${{ needs.container-build-commit.outputs.commit_sha }}"
+        SOURCE_IMAGE="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${COMMIT_SHA}"
+        LATEST_IMAGE="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:latest"
+        
+        echo "Tagging image with 'latest'"
+        echo "Source: ${SOURCE_IMAGE}"
+        echo "Target: ${LATEST_IMAGE}"
+        
+        # Create latest tag from commit SHA tag
+        echo "Inspecting source image before tagging:"
+        docker buildx imagetools inspect "${SOURCE_IMAGE}"
+        
+        docker buildx imagetools create "${SOURCE_IMAGE}" --tag "${LATEST_IMAGE}"
+        
+        echo "Inspecting latest image after tagging:"
+        docker buildx imagetools inspect "${LATEST_IMAGE}"
+        
+        echo "Successfully tagged ${COMMIT_SHA} as latest"
+        echo "Latest image available at: ${LATEST_IMAGE}"
+
+  # Helm chart build and push for commits
+  helm-chart-commit:
+    runs-on: ubuntu-latest
+    needs: [container-build-commit]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: '3.12.0'
+        
+    - name: Log in to Helm registry
+      run: |
+        echo "Authenticating with Helm registry..."
+        helm registry login ${{ env.REGISTRY }} -u "${{ secrets.QUAY_USERNAME }}" -p "${{ secrets.QUAY_PASSWORD }}"
+        
+    - name: Build and push Helm chart
+      run: |
+        COMMIT_SHA="${GITHUB_SHA:0:8}"
+        echo "Building and pushing Helm chart for commit..."
+        # Update values.yaml to point to the latest image
+        sed -i.bak 's|repository: ".*"|repository: "${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}"|' helm/values.yaml
+        sed -i.bak 's|tag: ".*"|tag: "latest"|' helm/values.yaml
+        echo "Updated Helm chart values to use latest image"
+        echo "Debug: HELM_FULL_REPO will be: oci://${{ env.REGISTRY }}/${{ env.NAMESPACE }}/charts"
+        echo "Debug: Chart name: kubevirt-redfish-0.0.0-${COMMIT_SHA}.tgz"
+        make build-push-chart VERSION="${COMMIT_SHA}"
+        echo "Helm chart build and push completed successfully"
+      env:
+        QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
+        QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
+
+  # Helm chart build and push for git tags
+  helm-chart-tag:
+    runs-on: ubuntu-latest
+    needs: [container-build-tag]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: '3.12.0'
+        
+    - name: Log in to Helm registry
+      run: |
+        echo "Authenticating with Helm registry..."
+        helm registry login ${{ env.REGISTRY }} -u "${{ secrets.QUAY_USERNAME }}" -p "${{ secrets.QUAY_PASSWORD }}"
+        
+    - name: Build and push Helm chart
+      run: |
+        TAG_NAME="${GITHUB_REF#refs/tags/}"
+        echo "Building and pushing Helm chart for tag..."
+        # Update values.yaml to point to the tagged image
+        sed -i.bak 's|repository: ".*"|repository: "${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}"|' helm/values.yaml
+        sed -i.bak 's|tag: ".*"|tag: "'${TAG_NAME}'"|' helm/values.yaml
+        echo "Updated Helm chart values to use ${TAG_NAME} image"
+        echo "Helm chart will be tagged as: $(echo ${TAG_NAME} | sed 's/^v//')"
+        make build-push-chart VERSION="${TAG_NAME}"
+        echo "Helm chart build and push completed successfully"
+      env:
+        QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
+        QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }} 

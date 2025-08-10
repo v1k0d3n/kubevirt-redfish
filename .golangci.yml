@@ -1,0 +1,101 @@
+run:
+  timeout: 5m
+  go: "1.21"
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - gofmt
+    - govet
+    - misspell
+    - gosec      # Security issues - important to catch
+    - goimports
+    # Temporarily disabled - too noisy for current codebase
+    # - errcheck     # Unchecked errors - many false positives 
+    # - staticcheck  # Static analysis - many style issues
+    # - gosimple     # Simplification suggestions
+    # - ineffassign  # Ineffectual assignments
+    # - unused       # Unused code - may be intentionally kept
+    # - revive       # Style guide enforcement
+    # - stylecheck   # Style consistency
+    # - whitespace   # Whitespace issues
+
+linters-settings:
+  gocyclo:
+    min-complexity: 15
+  dupl:
+    threshold: 100
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - experimental
+      - opinionated
+      - performance
+      - style
+  godot:
+    scope: all
+    period: true
+    capital: true
+  goimports:
+    local-prefixes: kubevirt-redfish
+  revive:
+    rules:
+      - name: exported
+        arguments:
+          - disableStutteringCheck
+  stylecheck:
+    initialisms:
+      - ACL
+      - API
+      - ASCII
+      - CPU
+      - CSS
+      - DNS
+      - EOF
+      - GUID
+      - HTML
+      - HTTP
+      - HTTPS
+      - ID
+      - IP
+      - JSON
+      - QPS
+      - RAM
+      - RPC
+      - SLA
+      - SMTP
+      - SQL
+      - SSH
+      - TCP
+      - TLS
+      - TTL
+      - UDP
+      - UI
+      - UID
+      - UUID
+      - URI
+      - URL
+      - UTF8
+      - VM
+      - XML
+      - XMPP
+      - XSRF
+      - XSS
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - dupl
+        - gocritic
+    - path: pkg/redfish/types\.go
+      linters:
+        - gocritic
+        - stylecheck
+    - path: pkg/config/config\.go
+      linters:
+        - gocritic
+        - stylecheck
+  max-issues-per-linter: 0
+  max-same-issues: 0 
