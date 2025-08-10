@@ -586,3 +586,370 @@ func TestEnhancedMiddleware_UpdateRateLimit(t *testing.T) {
 		t.Errorf("Expected 1 failure, got %d", rateLimit.Failures)
 	}
 }
+
+func TestEnhancedMiddleware_Authenticate(t *testing.T) {
+	cfg := &config.Config{
+		Auth: config.AuthConfig{
+			Users: []config.UserConfig{
+				{
+					Username: "testuser",
+					Password: "testpass",
+					Chassis:  []string{"chassis1"},
+				},
+				{
+					Username: "admin",
+					Password: "adminpass",
+					Chassis:  []string{"chassis1", "chassis2"},
+				},
+			},
+		},
+	}
+
+	middleware := NewEnhancedMiddleware(cfg)
+
+	testCases := []struct {
+		name           string
+		authHeader     string
+		path           string
+		expectedStatus int
+	}{
+		{
+			name:           "service root access",
+			authHeader:     "",
+			path:           "/redfish/v1/",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "valid credentials",
+			authHeader:     "Basic dGVzdHVzZXI6dGVzdHBhc3M=", // testuser:testpass
+			path:           "/redfish/v1/Chassis/chassis1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "invalid credentials",
+			authHeader:     "Basic d3Jvbmc6d3Jvbmc=", // wrong:wrong
+			path:           "/redfish/v1/Chassis/chassis1",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			name:           "no auth header",
+			authHeader:     "",
+			path:           "/redfish/v1/Chassis/chassis1",
+			expectedStatus: http.StatusUnauthorized,
+		},
+	}
+
+	// Test the Authenticate middleware function
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("success"))
+	})
+
+	authenticatedHandler := middleware.Authenticate(handler)
+
+	authTestCases := []struct {
+		name           string
+		authHeader     string
+		path           string
+		expectedStatus int
+	}{
+		{
+			name:           "service root access",
+			authHeader:     "",
+			path:           "/redfish/v1/",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "valid credentials",
+			authHeader:     "Basic dGVzdHVzZXI6dGVzdHBhc3M=", // testuser:testpass
+			path:           "/redfish/v1/Chassis/chassis1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "invalid credentials",
+			authHeader:     "Basic d3Jvbmc6d3Jvbmc=", // wrong:wrong
+			path:           "/redfish/v1/Chassis/chassis1",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			name:           "no auth header",
+			authHeader:     "",
+			path:           "/redfish/v1/Chassis/chassis1",
+			expectedStatus: http.StatusUnauthorized,
+		},
+	}
+
+	for _, tc := range authTestCases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", tc.path, nil)
+			if tc.authHeader != "" {
+				req.Header.Set("Authorization", tc.authHeader)
+			}
+
+			w := httptest.NewRecorder()
+			authenticatedHandler(w, req)
+
+			if w.Code != tc.expectedStatus {
+				t.Errorf("Expected status %d, got %d", tc.expectedStatus, w.Code)
+			}
+		})
+	}
+}
+
+func TestEnhancedMiddleware_ExtractAndValidateCredentialsEnhanced(t *testing.T) {
+	cfg := &config.Config{
+		Auth: config.AuthConfig{
+			Users: []config.UserConfig{
+				{
+					Username: "testuser",
+					Password: "testpass",
+					Chassis:  []string{"chassis1"},
+				},
+			},
+		},
+	}
+
+	middleware := NewEnhancedMiddleware(cfg)
+
+	credTestCases := []struct {
+		name            string
+		authHeader      string
+		expectedUser    string
+		expectedPass    string
+		expectedChassis []string
+		shouldSucceed   bool
+	}{
+		{
+			name:            "valid basic auth",
+			authHeader:      "Basic dGVzdHVzZXI6dGVzdHBhc3M=", // testuser:testpass
+			expectedUser:    "testuser",
+			expectedPass:    "testpass",
+			expectedChassis: []string{"chassis1"},
+			shouldSucceed:   true,
+		},
+		{
+			name:            "invalid basic auth - wrong credentials",
+			authHeader:      "Basic d3Jvbmc6d3Jvbmc=", // wrong:wrong
+			expectedUser:    "",
+			expectedPass:    "",
+			expectedChassis: nil,
+			shouldSucceed:   false,
+		},
+		{
+			name:            "missing auth header",
+			authHeader:      "",
+			expectedUser:    "",
+			expectedPass:    "",
+			expectedChassis: nil,
+			shouldSucceed:   false,
+		},
+		{
+			name:            "invalid auth header format",
+			authHeader:      "Invalid dGVzdHVzZXI6dGVzdHBhc3M=",
+			expectedUser:    "",
+			expectedPass:    "",
+			expectedChassis: nil,
+			shouldSucceed:   false,
+		},
+		{
+			name:            "malformed base64",
+			authHeader:      "Basic invalid-base64",
+			expectedUser:    "",
+			expectedPass:    "",
+			expectedChassis: nil,
+			shouldSucceed:   false,
+		},
+		{
+			name:            "missing colon in credentials",
+			authHeader:      "Basic dGVzdHVzZXI=", // testuser (no colon)
+			expectedUser:    "",
+			expectedPass:    "",
+			expectedChassis: nil,
+			shouldSucceed:   false,
+		},
+	}
+
+	for _, tc := range credTestCases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/test", nil)
+			if tc.authHeader != "" {
+				req.Header.Set("Authorization", tc.authHeader)
+			}
+
+			user, err := middleware.extractAndValidateCredentialsEnhanced(req, "test-correlation-id")
+
+			if tc.shouldSucceed {
+				if err != nil {
+					t.Errorf("Expected success, got error: %v", err)
+				}
+				if user == nil {
+					t.Error("Expected user, got nil")
+				} else {
+					if user.Username != tc.expectedUser {
+						t.Errorf("Expected user %s, got %s", tc.expectedUser, user.Username)
+					}
+					if len(user.Chassis) != len(tc.expectedChassis) {
+						t.Errorf("Expected %d chassis, got %d", len(tc.expectedChassis), len(user.Chassis))
+					}
+					for i, expectedChassis := range tc.expectedChassis {
+						if i >= len(user.Chassis) || user.Chassis[i] != expectedChassis {
+							t.Errorf("Expected chassis[%d] %s, got %s", i, expectedChassis, user.Chassis[i])
+						}
+					}
+				}
+			} else {
+				if err == nil {
+					t.Error("Expected error, got nil")
+				}
+				if user != nil {
+					t.Errorf("Expected nil user, got %v", user)
+				}
+			}
+		})
+	}
+}
+
+func TestEnhancedMiddleware_CleanupRateLimits(t *testing.T) {
+	middleware := NewEnhancedMiddleware(&config.Config{})
+
+	// Add some rate limit entries
+	middleware.rateLimits["192.168.1.1"] = &RateLimitInfo{
+		Attempts:     5,
+		LastAttempt:  time.Now().Add(-10 * time.Minute), // Old entry
+		BlockedUntil: time.Time{},
+		Failures:     0,
+	}
+
+	middleware.rateLimits["192.168.1.2"] = &RateLimitInfo{
+		Attempts:     3,
+		LastAttempt:  time.Now(), // Recent entry
+		BlockedUntil: time.Time{},
+		Failures:     0,
+	}
+
+	middleware.userRateLimits["testuser"] = &RateLimitInfo{
+		Attempts:     2,
+		LastAttempt:  time.Now().Add(-20 * time.Minute), // Old entry
+		BlockedUntil: time.Now().Add(5 * time.Minute),
+		Failures:     5,
+	}
+
+	// Run cleanup
+	middleware.cleanupRateLimits()
+
+	// Check that old entries were removed
+	if _, exists := middleware.rateLimits["192.168.1.1"]; exists {
+		t.Error("Expected old IP rate limit to be cleaned up")
+	}
+
+	if _, exists := middleware.userRateLimits["testuser"]; exists {
+		t.Error("Expected old user rate limit to be cleaned up")
+	}
+
+	// Check that recent entries remain
+	if _, exists := middleware.rateLimits["192.168.1.2"]; !exists {
+		t.Error("Expected recent IP rate limit to remain")
+	}
+}
+
+func TestEnhancedMiddleware_LogSecurityEvent_Enhanced(t *testing.T) {
+	middleware := NewEnhancedMiddleware(&config.Config{})
+
+	testCases := []struct {
+		name           string
+		eventType      string
+		username       string
+		ip             string
+		userAgent      string
+		details        map[string]interface{}
+		expectedEvents int
+	}{
+		{
+			name:           "login success",
+			eventType:      "login_success",
+			username:       "testuser",
+			ip:             "192.168.1.1",
+			userAgent:      "test-agent",
+			details:        map[string]interface{}{"chassis": "chassis1"},
+			expectedEvents: 1,
+		},
+		{
+			name:           "login failure",
+			eventType:      "login_failure",
+			username:       "invaliduser",
+			ip:             "192.168.1.2",
+			userAgent:      "test-agent",
+			details:        map[string]interface{}{"reason": "invalid_credentials"},
+			expectedEvents: 2,
+		},
+		{
+			name:           "rate limit hit",
+			eventType:      "rate_limit_hit",
+			username:       "testuser",
+			ip:             "192.168.1.3",
+			userAgent:      "test-agent",
+			details:        map[string]interface{}{"attempts": 10},
+			expectedEvents: 3,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			event := SecurityEvent{
+				Timestamp:     time.Now(),
+				EventType:     tc.eventType,
+				Username:      tc.username,
+				IPAddress:     tc.ip,
+				UserAgent:     tc.userAgent,
+				Path:          "/test",
+				Method:        "GET",
+				Status:        "success",
+				Details:       make(map[string]string),
+				CorrelationID: "test-correlation-id",
+			}
+
+			middleware.logSecurityEvent(event)
+
+			// Check that event was added
+			if len(middleware.securityEvents) != tc.expectedEvents {
+				t.Errorf("Expected %d events, got %d", tc.expectedEvents, len(middleware.securityEvents))
+			}
+
+			// Check the latest event
+			latestEvent := middleware.securityEvents[len(middleware.securityEvents)-1]
+			if latestEvent.EventType != tc.eventType {
+				t.Errorf("Expected event type %s, got %s", tc.eventType, latestEvent.EventType)
+			}
+			if latestEvent.Username != tc.username {
+				t.Errorf("Expected username %s, got %s", tc.username, latestEvent.Username)
+			}
+			if latestEvent.IPAddress != tc.ip {
+				t.Errorf("Expected IP %s, got %s", tc.ip, latestEvent.IPAddress)
+			}
+			if latestEvent.UserAgent != tc.userAgent {
+				t.Errorf("Expected user agent %s, got %s", tc.userAgent, latestEvent.UserAgent)
+			}
+		})
+	}
+
+	// Test event limit enforcement
+	for i := 0; i < 1100; i++ {
+		event := SecurityEvent{
+			Timestamp:     time.Now(),
+			EventType:     "test",
+			Username:      "user",
+			IPAddress:     "ip",
+			UserAgent:     "agent",
+			Path:          "/test",
+			Method:        "GET",
+			Status:        "success",
+			Details:       make(map[string]string),
+			CorrelationID: "test-correlation-id",
+		}
+		middleware.logSecurityEvent(event)
+	}
+
+	if len(middleware.securityEvents) > middleware.maxEvents {
+		t.Errorf("Expected events to be limited to %d, got %d", middleware.maxEvents, len(middleware.securityEvents))
+	}
+}
