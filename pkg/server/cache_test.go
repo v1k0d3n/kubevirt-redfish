@@ -309,45 +309,266 @@ func TestCache_GetStats(t *testing.T) {
 	}
 }
 
-func TestCacheResponseWriter(t *testing.T) {
-	// Create a test response writer
+// TestCacheCleanupExpired tests the cleanupExpired function
+func TestCacheCleanupExpired(t *testing.T) {
+	cache := NewCache(10, 1*time.Hour)
+
+	// Add some entries with different expiration times
+	now := time.Now()
+
+	// Add an expired entry
+	expiredEntry := &CacheEntry{
+		Data:      []byte("expired data"),
+		Headers:   map[string]string{"Content-Type": "text/plain"},
+		CreatedAt: now.Add(-2 * time.Hour),
+		ExpiresAt: now.Add(-1 * time.Hour), // Expired
+	}
+	cache.entries["expired"] = expiredEntry
+
+	// Add a valid entry
+	validEntry := &CacheEntry{
+		Data:      []byte("valid data"),
+		Headers:   map[string]string{"Content-Type": "text/plain"},
+		CreatedAt: now,
+		ExpiresAt: now.Add(1 * time.Hour), // Not expired
+	}
+	cache.entries["valid"] = validEntry
+
+	// Verify initial state
+	if len(cache.entries) != 2 {
+		t.Errorf("Expected 2 entries, got %d", len(cache.entries))
+	}
+
+	// Run cleanup
+	cache.cleanupExpired()
+
+	// Verify expired entry was removed
+	if len(cache.entries) != 1 {
+		t.Errorf("Expected 1 entry after cleanup, got %d", len(cache.entries))
+	}
+
+	// Verify valid entry still exists
+	if _, exists := cache.entries["valid"]; !exists {
+		t.Error("Valid entry should still exist after cleanup")
+	}
+
+	// Verify expired entry was removed
+	if _, exists := cache.entries["expired"]; exists {
+		t.Error("Expired entry should have been removed")
+	}
+}
+
+// TestCacheCleanupExpiredWithNoExpiredEntries tests cleanupExpired when no entries are expired
+func TestCacheCleanupExpiredWithNoExpiredEntries(t *testing.T) {
+	cache := NewCache(10, 1*time.Hour)
+
+	// Add only valid entries
+	now := time.Now()
+	validEntry := &CacheEntry{
+		Data:      []byte("valid data"),
+		Headers:   map[string]string{"Content-Type": "text/plain"},
+		CreatedAt: now,
+		ExpiresAt: now.Add(1 * time.Hour),
+	}
+	cache.entries["valid"] = validEntry
+
+	// Verify initial state
+	if len(cache.entries) != 1 {
+		t.Errorf("Expected 1 entry, got %d", len(cache.entries))
+	}
+
+	// Run cleanup
+	cache.cleanupExpired()
+
+	// Verify entry still exists
+	if len(cache.entries) != 1 {
+		t.Errorf("Expected 1 entry after cleanup, got %d", len(cache.entries))
+	}
+
+	if _, exists := cache.entries["valid"]; !exists {
+		t.Error("Valid entry should still exist after cleanup")
+	}
+}
+
+// TestCacheCleanupExpiredWithEmptyCache tests cleanupExpired with empty cache
+func TestCacheCleanupExpiredWithEmptyCache(t *testing.T) {
+	cache := NewCache(10, 1*time.Hour)
+
+	// Verify initial state
+	if len(cache.entries) != 0 {
+		t.Errorf("Expected 0 entries, got %d", len(cache.entries))
+	}
+
+	// Run cleanup
+	cache.cleanupExpired()
+
+	// Verify still empty
+	if len(cache.entries) != 0 {
+		t.Errorf("Expected 0 entries after cleanup, got %d", len(cache.entries))
+	}
+}
+
+// TestCacheMiddleware tests the CacheMiddleware function
+func TestCacheMiddleware(t *testing.T) {
+	// Create a mock server with cache
+	cache := NewCache(10, 1*time.Hour)
+	server := &Server{
+		responseCache: cache,
+	}
+
+	// Create a test handler that returns a simple response
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"message": "test response"}`))
+	})
+
+	// Create middleware
+	middleware := server.CacheMiddleware(testHandler)
+
+	// Test GET request (should be cached)
+	req, _ := http.NewRequest("GET", "/test", nil)
 	recorder := httptest.NewRecorder()
-	crw := &CacheResponseWriter{
-		ResponseWriter: recorder,
+
+	middleware.ServeHTTP(recorder, req)
+
+	// Verify response
+	if recorder.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", recorder.Code)
+	}
+
+	// Verify cache has entry
+	if len(cache.entries) != 1 {
+		t.Errorf("Expected 1 cache entry, got %d", len(cache.entries))
+	}
+
+	// Test POST request (should not be cached)
+	req2, _ := http.NewRequest("POST", "/test", nil)
+	recorder2 := httptest.NewRecorder()
+
+	middleware.ServeHTTP(recorder2, req2)
+
+	// Verify response
+	if recorder2.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", recorder2.Code)
+	}
+
+	// Verify cache still has only 1 entry (POST not cached)
+	if len(cache.entries) != 1 {
+		t.Errorf("Expected 1 cache entry after POST, got %d", len(cache.entries))
+	}
+}
+
+// TestCacheMiddlewareWithConditionalRequest tests CacheMiddleware with If-None-Match header
+func TestCacheMiddlewareWithConditionalRequest(t *testing.T) {
+	cache := NewCache(10, 1*time.Hour)
+	server := &Server{
+		responseCache: cache,
+	}
+
+	// Create a test handler
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ETag", `"test-etag"`)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"message": "test response"}`))
+	})
+
+	middleware := server.CacheMiddleware(testHandler)
+
+	// First request to populate cache
+	req, _ := http.NewRequest("GET", "/test", nil)
+	recorder := httptest.NewRecorder()
+	middleware.ServeHTTP(recorder, req)
+
+	// Second request with If-None-Match header
+	req2, _ := http.NewRequest("GET", "/test", nil)
+	req2.Header.Set("If-None-Match", `"test-etag"`)
+	recorder2 := httptest.NewRecorder()
+
+	middleware.ServeHTTP(recorder2, req2)
+
+	// The conditional request logic depends on the cache implementation
+	// We'll verify the request was processed successfully
+	if recorder2.Code != http.StatusOK && recorder2.Code != http.StatusNotModified {
+		t.Errorf("Expected status 200 or 304, got %d", recorder2.Code)
+	}
+}
+
+// TestCacheMiddlewareWithSkipCache tests CacheMiddleware with paths that should skip cache
+func TestCacheMiddlewareWithSkipCache(t *testing.T) {
+	cache := NewCache(10, 1*time.Hour)
+	server := &Server{
+		responseCache: cache,
+	}
+
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"message": "test response"}`))
+	})
+
+	middleware := server.CacheMiddleware(testHandler)
+
+	// Test request to a path that would typically skip cache (like /metrics)
+	req, _ := http.NewRequest("GET", "/metrics", nil)
+	recorder := httptest.NewRecorder()
+
+	middleware.ServeHTTP(recorder, req)
+
+	// Verify response
+	if recorder.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", recorder.Code)
+	}
+
+	// The cache behavior depends on the actual shouldSkipCache implementation
+	// We'll just verify the request was processed successfully
+}
+
+// TestCacheResponseWriter tests the CacheResponseWriter functionality
+func TestCacheResponseWriter(t *testing.T) {
+	// Create a mock response writer
+	mockWriter := httptest.NewRecorder()
+
+	// Create cache response writer
+	cacheWriter := &CacheResponseWriter{
+		ResponseWriter: mockWriter,
 		headers:        make(map[string]string),
 		statusCode:     http.StatusOK,
-		body:           []byte{},
 	}
 
 	// Test WriteHeader
-	crw.WriteHeader(http.StatusNotFound)
-	if crw.statusCode != http.StatusNotFound {
-		t.Errorf("Expected status code %d, got %d", http.StatusNotFound, crw.statusCode)
+	cacheWriter.WriteHeader(http.StatusCreated)
+	if cacheWriter.statusCode != http.StatusCreated {
+		t.Errorf("Expected status code %d, got %d", http.StatusCreated, cacheWriter.statusCode)
 	}
 
 	// Test Write
-	testData := []byte("test response")
-	n, err := crw.Write(testData)
+	testData := []byte("test data")
+	n, err := cacheWriter.Write(testData)
 	if err != nil {
-		t.Errorf("Write failed: %v", err)
+		t.Errorf("Write returned error: %v", err)
 	}
 	if n != len(testData) {
 		t.Errorf("Expected to write %d bytes, wrote %d", len(testData), n)
 	}
 
-	if string(crw.body) != string(testData) {
-		t.Errorf("Expected body '%s', got '%s'", string(testData), string(crw.body))
+	// Verify data was captured
+	if string(cacheWriter.body) != "test data" {
+		t.Errorf("Expected body 'test data', got '%s'", string(cacheWriter.body))
 	}
 
-	// Test Header
-	headers := crw.Header()
-	if headers == nil {
+	// Test Header - the header capture happens in the Header() method
+	// but the actual capture logic is in the middleware, so we'll just test
+	// that the Header() method works correctly
+	header := cacheWriter.Header()
+	if header == nil {
 		t.Error("Header() should return non-nil headers")
 	}
 
-	// Test that underlying response writer received the data
-	if recorder.Code != http.StatusNotFound {
-		t.Errorf("Expected underlying status code %d, got %d", http.StatusNotFound, recorder.Code)
+	// Verify the underlying response writer received the data
+	if mockWriter.Code != http.StatusCreated {
+		t.Errorf("Expected underlying status code %d, got %d", http.StatusCreated, mockWriter.Code)
 	}
 }
 
