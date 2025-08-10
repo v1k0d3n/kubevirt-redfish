@@ -25,6 +25,36 @@ import (
 	"time"
 )
 
+// Mock config that implements the required interfaces
+type MockConfig struct {
+	dataVolumeConfig struct {
+		storageSize        string
+		allowInsecureTLS   bool
+		storageClass       string
+		vmUpdateTimeout    string
+		isoDownloadTimeout string
+	}
+	kubeVirtConfig struct {
+		apiVersion       string
+		timeout          int
+		allowInsecureTLS bool
+	}
+}
+
+func (m *MockConfig) GetDataVolumeConfig() (string, bool, string, string, string) {
+	return m.dataVolumeConfig.storageSize,
+		m.dataVolumeConfig.allowInsecureTLS,
+		m.dataVolumeConfig.storageClass,
+		m.dataVolumeConfig.vmUpdateTimeout,
+		m.dataVolumeConfig.isoDownloadTimeout
+}
+
+func (m *MockConfig) GetKubeVirtConfig() (string, int, bool) {
+	return m.kubeVirtConfig.apiVersion,
+		m.kubeVirtConfig.timeout,
+		m.kubeVirtConfig.allowInsecureTLS
+}
+
 func TestNewClient_WithKubeconfig(t *testing.T) {
 	// Test with invalid kubeconfig path
 	_, err := NewClient("/nonexistent/kubeconfig", 30*time.Second, nil)
