@@ -130,14 +130,15 @@ jobs:
     - name: Run tests with coverage
       run: |
         echo "Running tests with coverage..."
-        go test -v -coverprofile=coverage.out ./...
+        go test -v -coverprofile=coverage.txt ./...
         echo "Coverage summary:"
-        go tool cover -func=coverage.out
+        go tool cover -func=coverage.txt
         
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v5
       with:
-        file: ./coverage.out
+        token: ${{ secrets.CODECOV_TOKEN }}
+        file: ./coverage.txt
         flags: unittests
         name: codecov-umbrella
         
@@ -145,7 +146,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: coverage-report
-        path: coverage.out
+        path: coverage.txt
         retention-days: 7
 
   # Integration test
