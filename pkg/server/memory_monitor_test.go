@@ -395,7 +395,7 @@ func TestMemoryMonitor_AlertLimits(t *testing.T) {
 	defer mm.Stop()
 
 	// Add more than 100 alerts to test the limit
-	for i := 0; i < 150; i++ {
+	for i := uint(0); i < 150; i++ {
 		mm.addAlert(AlertTypeHighMemoryUsage, SeverityLow,
 			fmt.Sprintf("Alert %d", i), uint64(i), uint64(i/2))
 	}
@@ -427,11 +427,11 @@ func TestMemoryMonitor_ConcurrentAccess(t *testing.T) {
 
 	// Test concurrent access to stats and alerts
 	var wg sync.WaitGroup
-	numGoroutines := 10
+	numGoroutines := uint(10)
 
-	for i := 0; i < numGoroutines; i++ {
+	for i := uint(0); i < numGoroutines; i++ {
 		wg.Add(1)
-		go func(id int) {
+		go func(id uint) {
 			defer wg.Done()
 
 			// Concurrent stats collection
@@ -499,10 +499,11 @@ func TestMemoryMonitor_AlertTypes(t *testing.T) {
 		SeverityCritical,
 	}
 
-	for i, alertType := range alertTypes {
-		severity := severities[i%len(severities)]
+	for i := uint(0); i < uint(len(alertTypes)); i++ {
+		alertType := alertTypes[i]
+		severity := severities[i%uint(len(severities))]
 		mm.addAlert(alertType, severity,
-			fmt.Sprintf("Test %s alert", alertType), uint64(i*1000), uint64(i*500))
+			fmt.Sprintf("Test %s alert", alertType), uint64(i)*1000, uint64(i)*500)
 	}
 
 	alerts := mm.GetAlerts()
