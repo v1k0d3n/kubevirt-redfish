@@ -630,7 +630,7 @@ kubevirt:
   timeout: 30        # Timeout in seconds for KubeVirt operations
 `
 
-	return os.WriteFile(path, []byte(defaultConfig), 0644)
+	return os.WriteFile(path, []byte(defaultConfig), 0600)
 }
 
 // logEnvironmentOverrides logs which environment variables are set

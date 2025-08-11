@@ -56,7 +56,7 @@ kubevirt:
   timeout: 30
 `
 
-	err := os.WriteFile(configPath, []byte(configContent), 0644)
+	err := os.WriteFile(configPath, []byte(configContent), 0600)
 	if err != nil {
 		t.Fatalf("Failed to write test config: %v", err)
 	}
@@ -141,7 +141,7 @@ datavolume:
   iso_download_timeout: "60m"
 `
 
-	err := os.WriteFile(configPath, []byte(validConfig), 0644)
+	err := os.WriteFile(configPath, []byte(validConfig), 0600)
 	if err != nil {
 		t.Fatalf("Failed to write test config: %v", err)
 	}
@@ -186,7 +186,7 @@ server:
   port: "invalid-port"  # Invalid: port should be integer
 `
 
-	err := os.WriteFile(configPath, []byte(invalidContent), 0644)
+	err := os.WriteFile(configPath, []byte(invalidContent), 0600)
 	if err != nil {
 		t.Fatalf("Failed to write invalid test config: %v", err)
 	}
