@@ -165,7 +165,6 @@ type RateLimiter struct {
 
 	// Global rate limiting
 	globalBucket *TokenBucket
-	globalMutex  sync.RWMutex
 }
 
 // NewRateLimiter creates a new rate limiter
@@ -311,12 +310,11 @@ func (rl *RateLimiter) AllowWithWait(r *http.Request, maxWait time.Duration) (bo
 	}
 
 	// Check main token bucket
-	allowed, bucketWait := rl.tokenBucket.TakeWithWait(1, maxWait-waitTime)
+	allowed, _ = rl.tokenBucket.TakeWithWait(1, maxWait-waitTime)
 	if !allowed {
 		rl.updateStats(0, 0, 1, 0, 0)
 		return false, maxWait
 	}
-	waitTime += bucketWait
 
 	// Request allowed
 	totalWaitTime := time.Since(startTime)

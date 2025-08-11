@@ -42,7 +42,6 @@
 package auth
 
 import (
-	"context"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -162,7 +161,7 @@ func (m *EnhancedMiddleware) Authenticate(handler http.HandlerFunc) http.Handler
 			}
 
 			// Inject context into request
-			ctx := context.WithValue(r.Context(), "auth", authCtx)
+			ctx := logger.WithAuth(r.Context(), authCtx)
 			r = r.WithContext(ctx)
 
 			// Call the original handler
@@ -260,7 +259,7 @@ func (m *EnhancedMiddleware) Authenticate(handler http.HandlerFunc) http.Handler
 		}
 
 		// Inject context into request
-		ctx := context.WithValue(r.Context(), "auth", authCtx)
+		ctx := logger.WithAuth(r.Context(), authCtx)
 		r = r.WithContext(ctx)
 
 		// Set user header for logging middleware

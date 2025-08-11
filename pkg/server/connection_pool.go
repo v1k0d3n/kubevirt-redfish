@@ -177,7 +177,7 @@ func (hcp *HTTPClientPool) performCleanup() {
 		excess := poolSize - hcp.maxSize/2
 		for i := 0; i < excess; i++ {
 			select {
-			case _ = <-hcp.clients:
+			case <-hcp.clients:
 				hcp.updateStats(0, 0, 1) // Client closed during cleanup
 			default:
 				break
@@ -201,7 +201,7 @@ func (hcp *HTTPClientPool) Stop() {
 	closeCount := 0
 	for {
 		select {
-		case _ = <-hcp.clients:
+		case <-hcp.clients:
 			hcp.updateStats(0, 0, 1) // Client closed
 			closeCount++
 		default:

@@ -1987,7 +1987,7 @@ func (s *Server) sendRedfishError(w http.ResponseWriter, r *http.Request, err er
 	}
 
 	// Extract error message
-	message := "An error occurred"
+	var message string
 	if redfishErr, ok := err.(*errors.RedfishError); ok {
 		message = redfishErr.Message
 	} else {

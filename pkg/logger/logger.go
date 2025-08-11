@@ -298,6 +298,7 @@ const (
 	userKey          contextKey = "user"
 	operationKey     contextKey = "operation"
 	resourceKey      contextKey = "resource"
+	authKey          contextKey = "auth"
 )
 
 var currentContext context.Context
@@ -346,6 +347,19 @@ func WithOperation(ctx context.Context, operation string) context.Context {
 // WithResource creates a new context with resource information
 func WithResource(ctx context.Context, resource string) context.Context {
 	return context.WithValue(ctx, resourceKey, resource)
+}
+
+// WithAuth creates a new context with authentication information
+func WithAuth(ctx context.Context, auth interface{}) context.Context {
+	return context.WithValue(ctx, authKey, auth)
+}
+
+// GetAuth retrieves authentication information from context
+func GetAuth(ctx context.Context) interface{} {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.Value(authKey)
 }
 
 // LogRequest logs an incoming request with correlation ID

@@ -20,7 +20,6 @@
 package auth
 
 import (
-	"context"
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
@@ -28,6 +27,7 @@ import (
 	"time"
 
 	"github.com/v1k0d3n/kubevirt-redfish/pkg/config"
+	"github.com/v1k0d3n/kubevirt-redfish/pkg/logger"
 )
 
 // =============================================================================
@@ -346,7 +346,7 @@ func TestHasChassisAccessFromRequest(t *testing.T) {
 					Chassis: "test-chassis",
 				}
 				req := httptest.NewRequest("GET", "/test", nil)
-				ctx := context.WithValue(req.Context(), "auth", authCtx)
+				ctx := logger.WithAuth(req.Context(), authCtx)
 				return req.WithContext(ctx)
 			},
 			chassis:        "test-chassis",
@@ -365,7 +365,7 @@ func TestHasChassisAccessFromRequest(t *testing.T) {
 					Chassis: "test-chassis",
 				}
 				req := httptest.NewRequest("GET", "/test", nil)
-				ctx := context.WithValue(req.Context(), "auth", authCtx)
+				ctx := logger.WithAuth(req.Context(), authCtx)
 				return req.WithContext(ctx)
 			},
 			chassis:        "test-chassis",
@@ -384,7 +384,7 @@ func TestHasChassisAccessFromRequest(t *testing.T) {
 					Chassis: "test-chassis",
 				}
 				req := httptest.NewRequest("GET", "/test", nil)
-				ctx := context.WithValue(req.Context(), "auth", authCtx)
+				ctx := logger.WithAuth(req.Context(), authCtx)
 				return req.WithContext(ctx)
 			},
 			chassis:        "test-chassis",
@@ -403,7 +403,7 @@ func TestHasChassisAccessFromRequest(t *testing.T) {
 					Chassis: "test-chassis",
 				}
 				req := httptest.NewRequest("GET", "/test", nil)
-				ctx := context.WithValue(req.Context(), "auth", authCtx)
+				ctx := logger.WithAuth(req.Context(), authCtx)
 				return req.WithContext(ctx)
 			},
 			chassis:        "test-chassis",
@@ -422,7 +422,7 @@ func TestHasChassisAccessFromRequest(t *testing.T) {
 					Chassis: "test-chassis",
 				}
 				req := httptest.NewRequest("GET", "/test", nil)
-				ctx := context.WithValue(req.Context(), "auth", authCtx)
+				ctx := logger.WithAuth(req.Context(), authCtx)
 				return req.WithContext(ctx)
 			},
 			chassis:        "",

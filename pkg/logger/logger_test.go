@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -337,6 +338,43 @@ func TestWithResource(t *testing.T) {
 	value := result.Value(contextKey("resource"))
 	if value != resource {
 		t.Errorf("Expected resource %s, got %v", resource, value)
+	}
+}
+
+func TestWithAuth(t *testing.T) {
+	ctx := context.Background()
+	authData := map[string]string{"user": "testuser", "role": "admin"}
+
+	result := WithAuth(ctx, authData)
+
+	// Check that the auth data was set
+	value := result.Value(contextKey("auth"))
+	if !reflect.DeepEqual(value, authData) {
+		t.Errorf("Expected auth data %v, got %v", authData, value)
+	}
+}
+
+func TestGetAuth(t *testing.T) {
+	ctx := context.Background()
+	authData := map[string]string{"user": "testuser", "role": "admin"}
+
+	// Test with auth data in context
+	ctxWithAuth := WithAuth(ctx, authData)
+	result := GetAuth(ctxWithAuth)
+	if !reflect.DeepEqual(result, authData) {
+		t.Errorf("Expected auth data %v, got %v", authData, result)
+	}
+
+	// Test with nil context
+	result = GetAuth(context.TODO())
+	if result != nil {
+		t.Errorf("Expected nil for TODO context, got %v", result)
+	}
+
+	// Test with context without auth data
+	result = GetAuth(ctx)
+	if result != nil {
+		t.Errorf("Expected nil for context without auth data, got %v", result)
 	}
 }
 

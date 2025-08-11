@@ -73,7 +73,6 @@ type TaskManager struct {
 	// Job queue management
 	jobQueue      chan *Job
 	priorityQueue *PriorityQueue
-	queueMutex    sync.RWMutex
 
 	// Worker pool
 	workers     []*Worker

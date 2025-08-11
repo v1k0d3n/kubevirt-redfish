@@ -46,13 +46,13 @@
 package auth
 
 import (
-	"context"
 	"encoding/base64"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/v1k0d3n/kubevirt-redfish/pkg/config"
+	"github.com/v1k0d3n/kubevirt-redfish/pkg/logger"
 )
 
 // User represents an authenticated user with access permissions.
@@ -116,7 +116,7 @@ func (m *Middleware) Authenticate(handler http.HandlerFunc) http.HandlerFunc {
 			}
 
 			// Inject context into request
-			ctx := context.WithValue(r.Context(), "auth", authCtx)
+			ctx := logger.WithAuth(r.Context(), authCtx)
 			r = r.WithContext(ctx)
 
 			// Call the original handler
@@ -151,7 +151,7 @@ func (m *Middleware) Authenticate(handler http.HandlerFunc) http.HandlerFunc {
 		}
 
 		// Inject context into request
-		ctx := context.WithValue(r.Context(), "auth", authCtx)
+		ctx := logger.WithAuth(r.Context(), authCtx)
 		r = r.WithContext(ctx)
 
 		// Set user header for logging middleware
@@ -306,7 +306,7 @@ func (m *Middleware) sendForbiddenResponse(w http.ResponseWriter, message string
 // Returns:
 // - *AuthContext: Authentication context from request, or nil if not found
 func GetAuthContext(r *http.Request) *AuthContext {
-	if authCtx, ok := r.Context().Value("auth").(*AuthContext); ok {
+	if authCtx, ok := logger.GetAuth(r.Context()).(*AuthContext); ok {
 		return authCtx
 	}
 	return nil
