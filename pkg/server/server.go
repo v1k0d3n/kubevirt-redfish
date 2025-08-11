@@ -50,6 +50,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -2051,7 +2052,7 @@ func (s *Server) sendForbidden(w http.ResponseWriter, message string) {
 // - w: HTTP response writer
 // - message: Error message to include in response
 func (s *Server) sendInternalError(w http.ResponseWriter, message string) {
-	err := errors.NewInternalError(message, fmt.Errorf(message))
+	err := errors.NewInternalError(message, stderrors.New(message))
 	s.sendRedfishError(w, nil, err)
 }
 

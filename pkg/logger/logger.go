@@ -171,7 +171,7 @@ func (l *Logger) InfoStructured(message string, fields map[string]interface{}) {
 	if l.shouldLog(INFO) {
 		l.mu.Lock()
 		defer l.mu.Unlock()
-		log.Printf(l.formatStructuredMessage(INFO, message, fields))
+		log.Print(l.formatStructuredMessage(INFO, message, fields))
 	}
 }
 
@@ -180,7 +180,7 @@ func (l *Logger) Warning(message string, args ...interface{}) {
 	if l.shouldLog(WARNING) {
 		l.mu.Lock()
 		defer l.mu.Unlock()
-		log.Printf(l.formatSimpleMessage(WARNING, message, args...))
+		log.Print(l.formatSimpleMessage(WARNING, message, args...))
 	}
 }
 
@@ -189,7 +189,7 @@ func (l *Logger) WarningStructured(message string, fields map[string]interface{}
 	if l.shouldLog(WARNING) {
 		l.mu.Lock()
 		defer l.mu.Unlock()
-		log.Printf(l.formatStructuredMessage(WARNING, message, fields))
+		log.Print(l.formatStructuredMessage(WARNING, message, fields))
 	}
 }
 
@@ -198,7 +198,7 @@ func (l *Logger) Error(message string, args ...interface{}) {
 	if l.shouldLog(ERROR) {
 		l.mu.Lock()
 		defer l.mu.Unlock()
-		log.Printf(l.formatSimpleMessage(ERROR, message, args...))
+		log.Print(l.formatSimpleMessage(ERROR, message, args...))
 	}
 }
 
@@ -207,7 +207,7 @@ func (l *Logger) ErrorStructured(message string, fields map[string]interface{}) 
 	if l.shouldLog(ERROR) {
 		l.mu.Lock()
 		defer l.mu.Unlock()
-		log.Printf(l.formatStructuredMessage(ERROR, message, fields))
+		log.Print(l.formatStructuredMessage(ERROR, message, fields))
 	}
 }
 
@@ -216,7 +216,7 @@ func (l *Logger) Critical(message string, args ...interface{}) {
 	if l.shouldLog(CRITICAL) {
 		l.mu.Lock()
 		defer l.mu.Unlock()
-		log.Printf(l.formatSimpleMessage(CRITICAL, message, args...))
+		log.Print(l.formatSimpleMessage(CRITICAL, message, args...))
 	}
 }
 
@@ -225,7 +225,7 @@ func (l *Logger) CriticalStructured(message string, fields map[string]interface{
 	if l.shouldLog(CRITICAL) {
 		l.mu.Lock()
 		defer l.mu.Unlock()
-		log.Printf(l.formatStructuredMessage(CRITICAL, message, fields))
+		log.Print(l.formatStructuredMessage(CRITICAL, message, fields))
 	}
 }
 
