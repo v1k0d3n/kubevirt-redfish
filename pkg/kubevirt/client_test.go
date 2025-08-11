@@ -605,6 +605,7 @@ func TestClient_GetVMStorage(t *testing.T) {
 		}
 	}()
 
+	//nolint:errcheck // We expect this to panic, not return an error
 	client.GetVMStorage("test-namespace", "test-vm")
 	t.Error("Expected panic, but function completed normally")
 }
@@ -622,6 +623,7 @@ func TestClient_GetVMBootOptions(t *testing.T) {
 		}
 	}()
 
+	//nolint:errcheck // We expect this to panic, not return an error
 	client.GetVMBootOptions("test-namespace", "test-vm")
 	t.Error("Expected panic, but function completed normally")
 }
@@ -642,6 +644,7 @@ func TestClient_SetVMBootOptions(t *testing.T) {
 	options := map[string]interface{}{
 		"bootOrder": []string{"cdrom", "disk"},
 	}
+	//nolint:errcheck // We expect this to panic, not return an error
 	client.SetVMBootOptions("test-namespace", "test-vm", options)
 	t.Error("Expected panic, but function completed normally")
 }
@@ -659,6 +662,7 @@ func TestClient_GetVMVirtualMedia(t *testing.T) {
 		}
 	}()
 
+	//nolint:errcheck // We expect this to panic, not return an error
 	client.GetVMVirtualMedia("test-namespace", "test-vm")
 	t.Error("Expected panic, but function completed normally")
 }
@@ -676,6 +680,7 @@ func TestClient_IsVirtualMediaInserted(t *testing.T) {
 		}
 	}()
 
+	//nolint:errcheck // We expect this to panic, not return an error
 	client.IsVirtualMediaInserted("test-namespace", "test-vm", "cdrom0")
 	t.Error("Expected panic, but function completed normally")
 }
@@ -710,6 +715,7 @@ func TestClient_InsertVirtualMedia(t *testing.T) {
 		}
 	}()
 
+	//nolint:errcheck // We expect this to panic, not return an error
 	client.InsertVirtualMedia("test-namespace", "test-vm", "cdrom0", "http://example.com/iso")
 	t.Error("Expected panic, but function completed normally")
 }
@@ -727,6 +733,7 @@ func TestClient_EjectVirtualMedia(t *testing.T) {
 		}
 	}()
 
+	//nolint:errcheck // We expect this to panic, not return an error
 	client.EjectVirtualMedia("test-namespace", "test-vm", "cdrom0")
 	t.Error("Expected panic, but function completed normally")
 }
@@ -744,6 +751,7 @@ func TestClient_SetBootOrder(t *testing.T) {
 		}
 	}()
 
+	//nolint:errcheck // We expect this to panic, not return an error
 	client.SetBootOrder("test-namespace", "test-vm", "cdrom")
 	t.Error("Expected panic, but function completed normally")
 }
@@ -761,6 +769,7 @@ func TestClient_SetBootOnce(t *testing.T) {
 		}
 	}()
 
+	//nolint:errcheck // We expect this to panic, not return an error
 	client.SetBootOnce("test-namespace", "test-vm", "cdrom")
 	t.Error("Expected panic, but function completed normally")
 }
@@ -778,6 +787,7 @@ func TestClient_ListVMs(t *testing.T) {
 		}
 	}()
 
+	//nolint:errcheck // We expect this to panic, not return an error
 	client.ListVMs("test-namespace")
 	t.Error("Expected panic, but function completed normally")
 }
