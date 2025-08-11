@@ -1336,7 +1336,7 @@ func (c *Client) downloadISO(imageURL string) (string, error) {
 			DisableCompression:  false,            // Enable compression for better performance
 			ForceAttemptHTTP2:   true,             // Enable HTTP/2 for better performance
 			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, // Allow self-signed certificates
+				InsecureSkipVerify: true, //nolint:gosec // Allow self-signed certificates for external ISO downloads
 			},
 		},
 	}
@@ -1737,7 +1737,7 @@ func (c *Client) uploadISOToDataVolume(namespace, dataVolumeName, filePath strin
 		Timeout: 30 * time.Minute, // Long timeout for large uploads
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, // Allow self-signed certificates
+				InsecureSkipVerify: true, //nolint:gosec // Allow self-signed certificates for internal CDI communication
 			},
 		},
 	}
@@ -2114,7 +2114,7 @@ func (c *Client) createCertConfigMap(namespace, configMapName, imageURL string) 
 func (c *Client) fetchServerCertificate(host string) (string, error) {
 	// Create a connection to get the certificate
 	conn, err := tls.Dial("tcp", host, &tls.Config{
-		InsecureSkipVerify: true, // We're fetching the cert to verify it later
+		InsecureSkipVerify: true, //nolint:gosec // We're fetching the cert to verify it later
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to connect to %s: %w", host, err)
