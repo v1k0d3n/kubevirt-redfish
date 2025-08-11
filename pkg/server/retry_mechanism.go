@@ -85,7 +85,7 @@ func NewRetryMechanism(config RetryConfig) *RetryMechanism {
 		stats: &RetryStats{
 			LastReset: time.Now(),
 		},
-		rand: rand.New(rand.NewSource(time.Now().UnixNano())),
+		rand: rand.New(rand.NewSource(time.Now().UnixNano())), //nolint:gosec // Jitter for load distribution, not security - performance critical
 	}
 
 	// Set defaults if not provided
