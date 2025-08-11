@@ -425,6 +425,7 @@ func TestClient_TestConnection(t *testing.T) {
 		}
 	}()
 
+	//nolint:errcheck // We expect this to panic, not return an error
 	client.TestConnection()
 	t.Error("Expected panic, but function completed normally")
 }
@@ -442,6 +443,7 @@ func TestClient_GetNamespaceInfo(t *testing.T) {
 		}
 	}()
 
+	//nolint:errcheck // We expect this to panic, not return an error
 	client.GetNamespaceInfo("test-namespace")
 	t.Error("Expected panic, but function completed normally")
 }
@@ -459,6 +461,7 @@ func TestClient_GetVMMemory(t *testing.T) {
 		}
 	}()
 
+	//nolint:errcheck // We expect this to panic, not return an error
 	client.GetVMMemory("test-namespace", "test-vm")
 	t.Error("Expected panic, but function completed normally")
 }
@@ -476,6 +479,7 @@ func TestClient_GetVMCPU(t *testing.T) {
 		}
 	}()
 
+	//nolint:errcheck // We expect this to panic, not return an error
 	client.GetVMCPU("test-namespace", "test-vm")
 	t.Error("Expected panic, but function completed normally")
 }
@@ -493,6 +497,7 @@ func TestClient_GetUploadProxyURL(t *testing.T) {
 		}
 	}()
 
+	//nolint:errcheck // We expect this to panic, not return an error
 	client.getUploadProxyURL()
 	t.Error("Expected panic, but function completed normally")
 }
@@ -510,6 +515,7 @@ func TestClient_IsDataVolumeReady(t *testing.T) {
 		}
 	}()
 
+	//nolint:errcheck // We expect this to panic, not return an error
 	client.IsDataVolumeReady("test-namespace", "test-dv")
 	t.Error("Expected panic, but function completed normally")
 }
@@ -527,6 +533,7 @@ func TestClient_CleanupExistingDataVolume(t *testing.T) {
 		}
 	}()
 
+	//nolint:errcheck // We expect this to panic, not return an error
 	client.cleanupExistingDataVolume("test-namespace", "test-dv")
 	t.Error("Expected panic, but function completed normally")
 }
@@ -544,6 +551,7 @@ func TestClient_GetVMNetworkDetails(t *testing.T) {
 		}
 	}()
 
+	//nolint:errcheck // We expect this to panic, not return an error
 	client.GetVMNetworkDetails("test-namespace", "test-vm")
 	t.Error("Expected panic, but function completed normally")
 }
@@ -561,6 +569,7 @@ func TestClient_GetVMStorageDetails(t *testing.T) {
 		}
 	}()
 
+	//nolint:errcheck // We expect this to panic, not return an error
 	client.GetVMStorageDetails("test-namespace", "test-vm")
 	t.Error("Expected panic, but function completed normally")
 }
@@ -578,6 +587,7 @@ func TestClient_GetVMNetworkInterfaces(t *testing.T) {
 		}
 	}()
 
+	//nolint:errcheck // We expect this to panic, not return an error
 	client.GetVMNetworkInterfaces("test-namespace", "test-vm")
 	t.Error("Expected panic, but function completed normally")
 }
