@@ -20,6 +20,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
@@ -318,11 +319,125 @@ func TestGetChassis(t *testing.T) {
 }
 
 func TestHasChassisAccessFromRequest(t *testing.T) {
-	// Test with no auth context
-	req := httptest.NewRequest("GET", "/test", nil)
-	hasAccess := HasChassisAccess(req, "test-chassis")
-	if hasAccess {
-		t.Error("Expected no access when no auth context is set")
+	tests := []struct {
+		name           string
+		setupRequest   func() *http.Request
+		chassis        string
+		expectedAccess bool
+	}{
+		{
+			name: "no auth context",
+			setupRequest: func() *http.Request {
+				return httptest.NewRequest("GET", "/test", nil)
+			},
+			chassis:        "test-chassis",
+			expectedAccess: false,
+		},
+		{
+			name: "user with matching chassis access",
+			setupRequest: func() *http.Request {
+				user := &User{
+					Username: "testuser",
+					Password: "testpass",
+					Chassis:  []string{"chassis1", "chassis2", "test-chassis"},
+				}
+				authCtx := &AuthContext{
+					User:    user,
+					Chassis: "test-chassis",
+				}
+				req := httptest.NewRequest("GET", "/test", nil)
+				ctx := context.WithValue(req.Context(), "auth", authCtx)
+				return req.WithContext(ctx)
+			},
+			chassis:        "test-chassis",
+			expectedAccess: true,
+		},
+		{
+			name: "user without matching chassis access",
+			setupRequest: func() *http.Request {
+				user := &User{
+					Username: "testuser",
+					Password: "testpass",
+					Chassis:  []string{"chassis1", "chassis2"},
+				}
+				authCtx := &AuthContext{
+					User:    user,
+					Chassis: "test-chassis",
+				}
+				req := httptest.NewRequest("GET", "/test", nil)
+				ctx := context.WithValue(req.Context(), "auth", authCtx)
+				return req.WithContext(ctx)
+			},
+			chassis:        "test-chassis",
+			expectedAccess: false,
+		},
+		{
+			name: "user with empty chassis list",
+			setupRequest: func() *http.Request {
+				user := &User{
+					Username: "testuser",
+					Password: "testpass",
+					Chassis:  []string{},
+				}
+				authCtx := &AuthContext{
+					User:    user,
+					Chassis: "test-chassis",
+				}
+				req := httptest.NewRequest("GET", "/test", nil)
+				ctx := context.WithValue(req.Context(), "auth", authCtx)
+				return req.WithContext(ctx)
+			},
+			chassis:        "test-chassis",
+			expectedAccess: false,
+		},
+		{
+			name: "user with nil chassis list",
+			setupRequest: func() *http.Request {
+				user := &User{
+					Username: "testuser",
+					Password: "testpass",
+					Chassis:  nil,
+				}
+				authCtx := &AuthContext{
+					User:    user,
+					Chassis: "test-chassis",
+				}
+				req := httptest.NewRequest("GET", "/test", nil)
+				ctx := context.WithValue(req.Context(), "auth", authCtx)
+				return req.WithContext(ctx)
+			},
+			chassis:        "test-chassis",
+			expectedAccess: false,
+		},
+		{
+			name: "empty chassis string",
+			setupRequest: func() *http.Request {
+				user := &User{
+					Username: "testuser",
+					Password: "testpass",
+					Chassis:  []string{"chassis1", "chassis2"},
+				}
+				authCtx := &AuthContext{
+					User:    user,
+					Chassis: "test-chassis",
+				}
+				req := httptest.NewRequest("GET", "/test", nil)
+				ctx := context.WithValue(req.Context(), "auth", authCtx)
+				return req.WithContext(ctx)
+			},
+			chassis:        "",
+			expectedAccess: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := tt.setupRequest()
+			hasAccess := HasChassisAccess(req, tt.chassis)
+			if hasAccess != tt.expectedAccess {
+				t.Errorf("HasChassisAccess() = %v, want %v", hasAccess, tt.expectedAccess)
+			}
+		})
 	}
 }
 
