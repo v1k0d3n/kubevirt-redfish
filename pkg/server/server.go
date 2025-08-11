@@ -220,8 +220,9 @@ func NewServer(config *config.Config, kubevirtClient *kubevirt.Client) *Server {
 func (s *Server) Start() error {
 	// Create HTTP server
 	s.httpServer = &http.Server{
-		Addr:    fmt.Sprintf("%s:%d", s.config.Server.Host, s.config.Server.Port),
-		Handler: s.createMux(),
+		Addr:              fmt.Sprintf("%s:%d", s.config.Server.Host, s.config.Server.Port),
+		Handler:           s.createMux(),
+		ReadHeaderTimeout: 10 * time.Second, // Protect against Slowloris attacks
 	}
 
 	// Configure TLS if enabled

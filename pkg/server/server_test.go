@@ -169,7 +169,8 @@ func TestServerShutdown(t *testing.T) {
 	// Test shutdown with HTTP server - create a new server for this test
 	server2 := NewServer(testConfig, mockClient)
 	server2.httpServer = &http.Server{
-		Addr: ":0", // Use port 0 to avoid conflicts
+		Addr:              ":0",             // Use port 0 to avoid conflicts
+		ReadHeaderTimeout: 10 * time.Second, // Protect against Slowloris attacks
 	}
 
 	// Start server in background with error channel
