@@ -111,44 +111,69 @@ func NewServer(config *config.Config, kubevirtClient *kubevirt.Client) *Server {
 	// Initialize security handlers
 	securityHandlers := NewSecurityHandlers(enhancedAuthMiddleware)
 
-	// Initialize enhanced task manager
-	taskManager := NewTaskManager(4, kubevirtClient) // 4 workers for background processing
+	var taskManager *TaskManager
+	var jobScheduler *JobScheduler
+	var memoryManager *MemoryManager
+	var connectionManager *ConnectionManager
+	var memoryMonitor *MemoryMonitor
+	var advancedCache *AdvancedCache
+	var responseOptimizer *ResponseOptimizer
+	var responseCacheOptimizer *ResponseCacheOptimizer
+	var circuitBreakerManager *CircuitBreakerManager
+	var retryManager *RetryManager
+	var rateLimitManager *RateLimitManager
+	var healthChecker *HealthChecker
+	var selfHealingManager *SelfHealingManager
 
-	// Initialize job scheduler
-	jobScheduler := NewJobScheduler()
+	// Initialize background components only if not in test mode
+	if !config.Server.TestMode {
+		// Initialize enhanced task manager
+		taskManager = NewTaskManager(4, kubevirtClient) // 4 workers for background processing
 
-	// Initialize memory manager
-	memoryManager := NewMemoryManager()
+		// Initialize job scheduler
+		jobScheduler = NewJobScheduler()
 
-	// Initialize connection manager
-	connectionManager := NewConnectionManager()
+		// Initialize memory manager
+		memoryManager = NewMemoryManager()
 
-	// Initialize memory monitor
-	memoryMonitor := NewMemoryMonitor()
+		// Initialize connection manager
+		connectionManager = NewConnectionManager()
 
-	// Initialize advanced cache
-	advancedCache := NewAdvancedCache()
+		// Initialize memory monitor
+		memoryMonitor = NewMemoryMonitor()
 
-	// Initialize response optimizer
-	responseOptimizer := NewResponseOptimizer()
+		// Initialize advanced cache
+		advancedCache = NewAdvancedCache()
 
-	// Initialize response cache optimizer
-	responseCacheOptimizer := NewResponseCacheOptimizer()
+		// Initialize response optimizer
+		responseOptimizer = NewResponseOptimizer()
 
-	// Initialize circuit breaker manager
-	circuitBreakerManager := NewCircuitBreakerManager()
+		// Initialize response cache optimizer
+		responseCacheOptimizer = NewResponseCacheOptimizer()
 
-	// Initialize retry manager
-	retryManager := NewRetryManager()
+		// Initialize circuit breaker manager
+		circuitBreakerManager = NewCircuitBreakerManager()
 
-	// Initialize rate limit manager
-	rateLimitManager := NewRateLimitManager()
+		// Initialize retry manager
+		retryManager = NewRetryManager()
 
-	// Initialize health checker
-	healthChecker := NewHealthChecker()
+		// Initialize rate limit manager
+		rateLimitManager = NewRateLimitManager()
 
-	// Initialize self-healing manager
-	selfHealingManager := NewSelfHealingManager(healthChecker, circuitBreakerManager, retryManager)
+		// Initialize health checker
+		healthChecker = NewHealthChecker()
+
+		// Initialize self-healing manager
+		selfHealingManager = NewSelfHealingManager(healthChecker, circuitBreakerManager, retryManager)
+	} else {
+		logger.Info("Test mode enabled - skipping background component initialization")
+	}
+
+	// Initialize response cache (skip in test mode)
+	var responseCache *Cache
+	if !config.Server.TestMode {
+		responseCache = NewCache(1000, 5*time.Minute) // 1000 entries, 5 minute default TTL
+	}
 
 	server := &Server{
 		config:                 config,
@@ -170,13 +195,17 @@ func NewServer(config *config.Config, kubevirtClient *kubevirt.Client) *Server {
 		healthChecker:          healthChecker,
 		selfHealingManager:     selfHealingManager,
 
-		startTime:     time.Now(),                    // Initialize start time
-		responseCache: NewCache(1000, 5*time.Minute), // 1000 entries, 5 minute default TTL
+		startTime:     time.Now(), // Initialize start time
+		responseCache: responseCache,
 	}
 
-	// Add default background jobs
-	if err := jobScheduler.AddDefaultJobs(server); err != nil {
-		logger.Warning("Failed to add default background jobs: %v", err)
+	// Add default background jobs (skip in test mode)
+	if !config.Server.TestMode {
+		if err := jobScheduler.AddDefaultJobs(server); err != nil {
+			logger.Warning("Failed to add default background jobs: %v", err)
+		}
+	} else {
+		logger.Info("Test mode enabled - skipping background job initialization")
 	}
 
 	return server
@@ -214,64 +243,69 @@ func (s *Server) Start() error {
 func (s *Server) Shutdown() error {
 	logger.Info("Shutting down server...")
 
-	// Stop the enhanced task manager
-	if s.taskManager != nil {
-		s.taskManager.Stop()
-	}
+	// In test mode, components may be nil, so check before stopping
+	if s.config.Server.TestMode {
+		logger.Info("Test mode - skipping background component shutdown")
+	} else {
+		// Stop the enhanced task manager
+		if s.taskManager != nil {
+			s.taskManager.Stop()
+		}
 
-	// Stop the job scheduler
-	if s.jobScheduler != nil {
-		s.jobScheduler.Stop()
-	}
+		// Stop the job scheduler
+		if s.jobScheduler != nil {
+			s.jobScheduler.Stop()
+		}
 
-	// Stop the memory manager
-	if s.memoryManager != nil {
-		s.memoryManager.Stop()
-	}
+		// Stop the memory manager
+		if s.memoryManager != nil {
+			s.memoryManager.Stop()
+		}
 
-	// Stop the connection manager
-	if s.connectionManager != nil {
-		s.connectionManager.Stop()
-	}
+		// Stop the connection manager
+		if s.connectionManager != nil {
+			s.connectionManager.Stop()
+		}
 
-	// Stop the memory monitor
-	if s.memoryMonitor != nil {
-		s.memoryMonitor.Stop()
-	}
+		// Stop the memory monitor
+		if s.memoryMonitor != nil {
+			s.memoryMonitor.Stop()
+		}
 
-	// Stop the response cache
-	if s.responseCache != nil {
-		s.responseCache.Stop()
-	}
+		// Stop the response cache
+		if s.responseCache != nil {
+			s.responseCache.Stop()
+		}
 
-	// Stop the advanced cache
-	if s.advancedCache != nil {
-		s.advancedCache.Stop()
-	}
+		// Stop the advanced cache
+		if s.advancedCache != nil {
+			s.advancedCache.Stop()
+		}
 
-	// Stop the response cache optimizer
-	if s.responseCacheOptimizer != nil {
-		s.responseCacheOptimizer.Stop()
-	}
+		// Stop the response cache optimizer
+		if s.responseCacheOptimizer != nil {
+			s.responseCacheOptimizer.Stop()
+		}
 
-	// Stop the circuit breaker manager
-	if s.circuitBreakerManager != nil {
-		s.circuitBreakerManager.Stop()
-	}
+		// Stop the circuit breaker manager
+		if s.circuitBreakerManager != nil {
+			s.circuitBreakerManager.Stop()
+		}
 
-	// Stop the retry manager (no Stop method, just log)
-	if s.retryManager != nil {
-		logger.Info("Retry manager stopped")
-	}
+		// Stop the retry manager (no Stop method, just log)
+		if s.retryManager != nil {
+			logger.Info("Retry manager stopped")
+		}
 
-	// Stop the rate limit manager (no Stop method, just log)
-	if s.rateLimitManager != nil {
-		logger.Info("Rate limit manager stopped")
-	}
+		// Stop the rate limit manager (no Stop method, just log)
+		if s.rateLimitManager != nil {
+			logger.Info("Rate limit manager stopped")
+		}
 
-	// Stop the health checker
-	if s.healthChecker != nil {
-		s.healthChecker.Stop()
+		// Stop the health checker
+		if s.healthChecker != nil {
+			s.healthChecker.Stop()
+		}
 	}
 
 	// Stop the self-healing manager

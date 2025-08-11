@@ -217,8 +217,26 @@ func (js *JobScheduler) executeJob(job *ScheduledJob) {
 
 	logger.Info("Executing scheduled job %s (%s)", job.ID, job.Name)
 
+	// Check if we should stop before executing
+	select {
+	case <-js.ctx.Done():
+		logger.Info("Job scheduler stopping, skipping job %s", job.ID)
+		return
+	default:
+		// Continue with job execution
+	}
+
 	// Execute the job
 	err := job.Handler()
+
+	// Check again if we should stop before updating state
+	select {
+	case <-js.ctx.Done():
+		logger.Info("Job scheduler stopping, skipping state update for job %s", job.ID)
+		return
+	default:
+		// Continue with state update
+	}
 
 	// Update job state
 	js.mutex.Lock()
@@ -304,6 +322,9 @@ func (js *JobScheduler) Stop() {
 	}
 
 	js.cancel()
+
+	// Give a small grace period for any running jobs to complete
+	time.Sleep(100 * time.Millisecond)
 
 	js.mutex.Lock()
 	jobCount := len(js.jobs)

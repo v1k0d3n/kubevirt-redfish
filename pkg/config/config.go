@@ -80,9 +80,10 @@ type Config struct {
 // ServerConfig holds HTTP server configuration including host, port, and TLS settings.
 // The server configuration determines how the Redfish API server listens for requests.
 type ServerConfig struct {
-	Host string    `mapstructure:"host"`
-	Port int       `mapstructure:"port"`
-	TLS  TLSConfig `mapstructure:"tls"`
+	Host     string    `mapstructure:"host"`
+	Port     int       `mapstructure:"port"`
+	TLS      TLSConfig `mapstructure:"tls"`
+	TestMode bool      `mapstructure:"test_mode"` // Disables background processes for testing
 }
 
 // TLSConfig holds TLS configuration for secure HTTPS connections.
