@@ -250,6 +250,12 @@ func (c *Cache) Stop() {
 // CacheMiddleware provides caching functionality for HTTP handlers
 func (s *Server) CacheMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip caching if responseCache is nil (test mode)
+		if s.responseCache == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		// Skip caching for non-GET requests
 		if r.Method != "GET" {
 			next.ServeHTTP(w, r)

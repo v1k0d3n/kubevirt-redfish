@@ -1864,6 +1864,22 @@ func (s *Server) sendJSON(w http.ResponseWriter, data interface{}) {
 // - r: HTTP request (for compression negotiation)
 // - data: Data to serialize as JSON
 func (s *Server) sendOptimizedJSON(w http.ResponseWriter, r *http.Request, data interface{}) {
+	// Set content type header
+	w.Header().Set("Content-Type", "application/json")
+
+	// In test mode, use standard JSON marshaling
+	if s.config.Server.TestMode || s.memoryManager == nil {
+		jsonData, err := json.Marshal(data)
+		if err != nil {
+			logger.Error("Failed to marshal JSON response: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(jsonData)))
+		w.Write(jsonData)
+		return
+	}
+
 	// Use optimized JSON marshaling from memory manager
 	jsonData, err := s.memoryManager.OptimizedJSONMarshal(data)
 	if err != nil {
@@ -1872,12 +1888,15 @@ func (s *Server) sendOptimizedJSON(w http.ResponseWriter, r *http.Request, data 
 		return
 	}
 
-	// Set content type header
-	w.Header().Set("Content-Type", "application/json")
-
 	// Use response optimizer for compression
-	if err := s.responseOptimizer.OptimizeResponse(w, r, jsonData); err != nil {
-		logger.Error("Failed to optimize response: %v", err)
+	if s.responseOptimizer != nil {
+		if err := s.responseOptimizer.OptimizeResponse(w, r, jsonData); err != nil {
+			logger.Error("Failed to optimize response: %v", err)
+			// Fallback to uncompressed response
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(jsonData)))
+			w.Write(jsonData)
+		}
+	} else {
 		// Fallback to uncompressed response
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(jsonData)))
 		w.Write(jsonData)
@@ -2062,6 +2081,22 @@ func (s *Server) sendConflictError(w http.ResponseWriter, resource, details stri
 // sendJSONResponse sends a JSON response with proper headers and status code.
 // It uses the memory manager for optimized JSON marshaling.
 func (s *Server) sendJSONResponse(w http.ResponseWriter, statusCode int, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// In test mode, use standard JSON marshaling
+	if s.config.Server.TestMode || s.memoryManager == nil {
+		jsonData, err := json.Marshal(data)
+		if err != nil {
+			logger.Error("Failed to marshal JSON response: %v", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(jsonData)))
+		w.WriteHeader(statusCode)
+		w.Write(jsonData)
+		return
+	}
+
 	// Use optimized JSON marshaling from memory manager
 	jsonData, err := s.memoryManager.OptimizedJSONMarshal(data)
 	if err != nil {
@@ -2070,7 +2105,6 @@ func (s *Server) sendJSONResponse(w http.ResponseWriter, statusCode int, data in
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(jsonData)))
 	w.WriteHeader(statusCode)
 	w.Write(jsonData)

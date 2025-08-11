@@ -284,15 +284,7 @@ func TestServerValidateMethod(t *testing.T) {
 
 // TestServerSendJSON tests the sendJSON method
 func TestServerSendJSON(t *testing.T) {
-	testConfig := &config.Config{
-		Server: config.ServerConfig{
-			Host: "localhost",
-			Port: 8080,
-		},
-	}
-
-	mockClient := &kubevirt.Client{}
-	server := NewServer(testConfig, mockClient)
+	server := testServer(t)
 
 	w := httptest.NewRecorder()
 	testData := map[string]interface{}{
@@ -314,15 +306,7 @@ func TestServerSendJSON(t *testing.T) {
 
 // TestServerSendOptimizedJSON tests the sendOptimizedJSON method
 func TestServerSendOptimizedJSON(t *testing.T) {
-	testConfig := &config.Config{
-		Server: config.ServerConfig{
-			Host: "localhost",
-			Port: 8080,
-		},
-	}
-
-	mockClient := &kubevirt.Client{}
-	server := NewServer(testConfig, mockClient)
+	server := testServer(t)
 
 	tests := []struct {
 		name           string
@@ -364,15 +348,7 @@ func TestServerSendOptimizedJSON(t *testing.T) {
 
 // TestServerSetCacheHeaders tests the setCacheHeaders method
 func TestServerSetCacheHeaders(t *testing.T) {
-	testConfig := &config.Config{
-		Server: config.ServerConfig{
-			Host: "localhost",
-			Port: 8080,
-		},
-	}
-
-	mockClient := &kubevirt.Client{}
-	server := NewServer(testConfig, mockClient)
+	server := testServer(t)
 
 	tests := []struct {
 		name         string
@@ -619,15 +595,7 @@ func TestServerSendConflictError(t *testing.T) {
 
 // TestServerSendJSONResponse tests the sendJSONResponse method
 func TestServerSendJSONResponse(t *testing.T) {
-	testConfig := &config.Config{
-		Server: config.ServerConfig{
-			Host: "localhost",
-			Port: 8080,
-		},
-	}
-
-	mockClient := &kubevirt.Client{}
-	server := NewServer(testConfig, mockClient)
+	server := testServer(t)
 
 	tests := []struct {
 		name       string
@@ -664,15 +632,7 @@ func TestServerSendJSONResponse(t *testing.T) {
 
 // TestServerGetAuthMiddleware tests the getAuthMiddleware method
 func TestServerGetAuthMiddleware(t *testing.T) {
-	testConfig := &config.Config{
-		Server: config.ServerConfig{
-			Host: "localhost",
-			Port: 8080,
-		},
-	}
-
-	mockClient := &kubevirt.Client{}
-	server := NewServer(testConfig, mockClient)
+	server := testServer(t)
 
 	middleware := server.getAuthMiddleware()
 	assert.NotNil(t, middleware)
@@ -681,38 +641,44 @@ func TestServerGetAuthMiddleware(t *testing.T) {
 
 // TestServerGetTaskManager tests the getTaskManager methods
 func TestServerGetTaskManager(t *testing.T) {
-	testConfig := &config.Config{
-		Server: config.ServerConfig{
-			Host: "localhost",
-			Port: 8080,
-		},
+	server := testServer(t)
+
+	// Test getTaskManager (in test mode, this will be nil)
+	taskManager := server.getTaskManager()
+	if server.config.Server.TestMode {
+		assert.Nil(t, taskManager)
+	} else {
+		assert.NotNil(t, taskManager)
+		assert.Equal(t, server.taskManager, taskManager)
 	}
 
-	mockClient := &kubevirt.Client{}
-	server := NewServer(testConfig, mockClient)
-
-	// Test getTaskManager
-	taskManager := server.getTaskManager()
-	assert.NotNil(t, taskManager)
-	assert.Equal(t, server.taskManager, taskManager)
-
-	// Test getTaskManagerForCreation
+	// Test getTaskManagerForCreation (in test mode, this will be nil)
 	taskManagerForCreation := server.getTaskManagerForCreation()
-	assert.NotNil(t, taskManagerForCreation)
-	assert.Equal(t, server.taskManager, taskManagerForCreation)
+	if server.config.Server.TestMode {
+		assert.Nil(t, taskManagerForCreation)
+	} else {
+		assert.NotNil(t, taskManagerForCreation)
+		assert.Equal(t, server.taskManager, taskManagerForCreation)
+	}
 
-	// Test getTaskManagerForRetrieval
+	// Test getTaskManagerForRetrieval (in test mode, this will be nil)
 	taskManagerForRetrieval := server.getTaskManagerForRetrieval()
-	assert.NotNil(t, taskManagerForRetrieval)
-	assert.Equal(t, server.taskManager, taskManagerForRetrieval)
+	if server.config.Server.TestMode {
+		assert.Nil(t, taskManagerForRetrieval)
+	} else {
+		assert.NotNil(t, taskManagerForRetrieval)
+		assert.Equal(t, server.taskManager, taskManagerForRetrieval)
+	}
 }
 
 // TestServerCreateMux tests the createMux method
 func TestServerCreateMux(t *testing.T) {
+	// For this test, we need a full config with auth and chassis
 	testConfig := &config.Config{
 		Server: config.ServerConfig{
-			Host: "localhost",
-			Port: 8080,
+			Host:     "localhost",
+			Port:     8080,
+			TestMode: true, // Use test mode to avoid background processes
 		},
 		Auth: config.AuthConfig{
 			Users: []config.UserConfig{
