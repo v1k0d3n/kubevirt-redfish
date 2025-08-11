@@ -195,6 +195,7 @@ func TestJobScheduler_GetJob(t *testing.T) {
 	}
 	if job == nil {
 		t.Error("Should return job")
+		return // Early return to prevent nil pointer dereference
 	}
 
 	if job.ID != "test-job" {

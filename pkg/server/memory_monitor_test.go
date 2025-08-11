@@ -109,8 +109,7 @@ func TestMemoryMonitor_checkAlerts(t *testing.T) {
 	mm.checkAlerts()
 
 	// Check if any alerts were generated (depends on current memory usage)
-	alerts = mm.GetAlerts()
-	// Note: We can't predict if alerts will be generated as it depends on actual memory usage
+	_ = mm.GetAlerts() // We can't predict if alerts will be generated as it depends on actual memory usage
 	// But we can verify the function doesn't panic and processes correctly
 }
 

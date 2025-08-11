@@ -173,6 +173,7 @@ func TestHealthChecker_GetCheck(t *testing.T) {
 	}
 	if check == nil {
 		t.Error("Should return check for existing check")
+		return // Early return to prevent nil pointer dereference
 	}
 
 	if check.Name != "test-check" {

@@ -105,6 +105,7 @@ func TestCache_GetAndSet(t *testing.T) {
 	}
 	if entry == nil {
 		t.Error("Should return entry after setting it")
+		return // Early return to prevent nil pointer dereference
 	}
 
 	if string(entry.Data) != string(data) {

@@ -136,6 +136,7 @@ func TestServerBasic(t *testing.T) {
 	assert.NotNil(t, server.startTime)
 	// Test that config mutex is properly initialized by testing its functionality
 	server.configMutex.RLock()
+	_ = server.config // Access config while holding lock
 	server.configMutex.RUnlock()
 
 	// Test basic functionality without starting background processes
@@ -935,10 +936,12 @@ func TestServerConfigMutex(t *testing.T) {
 
 	// Test that we can acquire read lock
 	server.configMutex.RLock()
+	_ = server.config // Access config while holding read lock
 	server.configMutex.RUnlock()
 
 	// Test that we can acquire write lock
 	server.configMutex.Lock()
+	_ = server.config // Access config while holding write lock
 	server.configMutex.Unlock()
 }
 

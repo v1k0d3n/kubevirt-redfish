@@ -144,7 +144,7 @@ func (l *Logger) Debug(message string, args ...interface{}) {
 	if l.shouldLog(DEBUG) {
 		l.mu.Lock()
 		defer l.mu.Unlock()
-		log.Printf(l.formatSimpleMessage(DEBUG, message, args...))
+		log.Print(l.formatSimpleMessage(DEBUG, message, args...))
 	}
 }
 
@@ -153,7 +153,7 @@ func (l *Logger) DebugStructured(message string, fields map[string]interface{}) 
 	if l.shouldLog(DEBUG) {
 		l.mu.Lock()
 		defer l.mu.Unlock()
-		log.Printf(l.formatStructuredMessage(DEBUG, message, fields))
+		log.Print(l.formatStructuredMessage(DEBUG, message, fields))
 	}
 }
 
@@ -162,7 +162,7 @@ func (l *Logger) Info(message string, args ...interface{}) {
 	if l.shouldLog(INFO) {
 		l.mu.Lock()
 		defer l.mu.Unlock()
-		log.Printf(l.formatSimpleMessage(INFO, message, args...))
+		log.Print(l.formatSimpleMessage(INFO, message, args...))
 	}
 }
 

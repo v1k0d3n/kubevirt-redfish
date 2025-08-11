@@ -82,6 +82,7 @@ func TestAdvancedCache_Get(t *testing.T) {
 	}
 	if entry == nil {
 		t.Error("Expected existing key to return non-nil entry")
+		return // Early return to prevent nil pointer dereference
 	}
 	if string(entry.Data) != "test_data" {
 		t.Errorf("Expected data to be 'test_data', got '%s'", string(entry.Data))

@@ -388,6 +388,7 @@ func TestStringPtr(t *testing.T) {
 
 	if ptr == nil {
 		t.Error("stringPtr should not return nil")
+		return // Early return to prevent nil pointer dereference
 	}
 	if *ptr != testString {
 		t.Errorf("Expected '%s', got '%s'", testString, *ptr)
