@@ -25,12 +25,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/v1k0d3n/kubevirt-redfish/pkg/auth"
 	"github.com/v1k0d3n/kubevirt-redfish/pkg/config"
 	"github.com/v1k0d3n/kubevirt-redfish/pkg/kubevirt"
+	"github.com/v1k0d3n/kubevirt-redfish/pkg/logger"
 	"github.com/v1k0d3n/kubevirt-redfish/pkg/redfish"
 )
 
@@ -953,9 +956,38 @@ func testServer(t *testing.T) *Server {
 			Port:     8080,
 			TestMode: true, // Disable background processes for testing
 		},
+		Auth: config.AuthConfig{
+			Users: []config.UserConfig{
+				{
+					Username: "testuser",
+					Password: "testpass",
+					Chassis:  []string{"chassis1"},
+				},
+				{
+					Username: "noaccess",
+					Password: "noaccess",
+					Chassis:  []string{},
+				},
+			},
+		},
+		Chassis: []config.ChassisConfig{
+			{
+				Name:      "chassis1",
+				Namespace: "default",
+				VMSelector: &kubevirt.VMSelectorConfig{
+					Labels: map[string]string{
+						"app": "test",
+					},
+				},
+			},
+		},
 	}
 
-	mockClient := &kubevirt.Client{}
+	// Create a mock client that returns empty results instead of panicking
+	mockClient := &kubevirt.Client{
+		// The client will be nil but we'll handle this in the tests
+		// by expecting the functions to return empty results or errors
+	}
 	server := NewServer(testConfig, mockClient)
 
 	// For testing, we want to disable background processes that can cause hanging
@@ -1045,4 +1077,179 @@ func TestServerUtilityFunctions(t *testing.T) {
 	assert.True(t, server.validateMethod(w, req, []string{"OPTIONS", "GET"}))
 
 	t.Log("Server utility functions test completed successfully")
+}
+
+// TestHandleChassisCollection tests the handleChassisCollection HTTP handler
+func TestHandleChassisCollection(t *testing.T) {
+	server := testServer(t)
+
+	// Test 1: Valid GET request to chassis collection
+	t.Run("Valid GET request", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/redfish/v1/Chassis", nil)
+		req.Header.Set("Authorization", "Basic dGVzdHVzZXI6dGVzdHBhc3M=") // testuser:testpass
+
+		// Set up authentication context manually for testing
+		user := &auth.User{
+			Username: "testuser",
+			Password: "testpass",
+			Chassis:  []string{"chassis1"},
+		}
+		authCtx := &auth.AuthContext{
+			User:    user,
+			Chassis: "",
+		}
+		ctx := logger.WithAuth(req.Context(), authCtx)
+		req = req.WithContext(ctx)
+
+		// Debug: Check if auth context is set correctly
+		retrievedAuthCtx := auth.GetAuthContext(req)
+		if retrievedAuthCtx != nil && retrievedAuthCtx.User != nil {
+			t.Logf("Auth context found: user=%s, chassis=%v", retrievedAuthCtx.User.Username, retrievedAuthCtx.User.Chassis)
+		} else {
+			t.Logf("Auth context not found or user is nil")
+		}
+
+		// Debug: Check what chassis name will be extracted
+		pathParts := strings.Split(req.URL.Path, "/")
+		t.Logf("Path: %s, PathParts: %v", req.URL.Path, pathParts)
+		if len(pathParts) >= 4 {
+			t.Logf("Chassis name that will be extracted: '%s'", pathParts[3])
+		}
+
+		w := httptest.NewRecorder()
+
+		server.handleChassisCollection(w, req)
+
+		// Verify response
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var response redfish.ChassisCollection
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "/redfish/v1/Chassis", response.OdataID)
+		assert.Equal(t, "Chassis Collection", response.Name)
+		assert.Equal(t, "#ChassisCollection.ChassisCollection", response.OdataType)
+		assert.Len(t, response.Members, 1) // Should have one chassis from test config
+		assert.Equal(t, 1, response.MembersCount)
+	})
+
+	// Test 2: User with no chassis access
+	t.Run("User with no chassis access", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/redfish/v1/Chassis", nil)
+		req.Header.Set("Authorization", "Basic bm9hY2Nlc3M6bm9hY2Nlc3M=") // noaccess:noaccess
+
+		// Set up authentication context manually for testing
+		user := &auth.User{
+			Username: "noaccess",
+			Password: "noaccess",
+			Chassis:  []string{},
+		}
+		authCtx := &auth.AuthContext{
+			User:    user,
+			Chassis: "",
+		}
+		ctx := logger.WithAuth(req.Context(), authCtx)
+		req = req.WithContext(ctx)
+
+		w := httptest.NewRecorder()
+
+		server.handleChassisCollection(w, req)
+
+		// Verify response
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var response redfish.ChassisCollection
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, 0, response.MembersCount) // Should have no chassis
+		assert.Len(t, response.Members, 0)
+	})
+}
+
+// TestHandleChassis tests the handleChassis HTTP handler
+func TestHandleChassis(t *testing.T) {
+	server := testServer(t)
+
+	// Test 1: Valid GET request to specific chassis
+	t.Run("Valid GET request", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/redfish/v1/Chassis/chassis1", nil)
+		req.Header.Set("Authorization", "Basic dGVzdHVzZXI6dGVzdHBhc3M=") // testuser:testpass
+
+		// Set up authentication context manually for testing
+		user := &auth.User{
+			Username: "testuser",
+			Password: "testpass",
+			Chassis:  []string{"chassis1"},
+		}
+		authCtx := &auth.AuthContext{
+			User:    user,
+			Chassis: "",
+		}
+		ctx := logger.WithAuth(req.Context(), authCtx)
+		req = req.WithContext(ctx)
+
+		w := httptest.NewRecorder()
+
+		server.handleChassis(w, req)
+
+		// Debug: Let's see what the actual response is
+		t.Logf("Response status: %d", w.Code)
+		t.Logf("Response body: %s", w.Body.String())
+
+		// Verify response - expect success with empty computer systems
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var response redfish.Chassis
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "chassis1", response.ID)
+		assert.Equal(t, "chassis1", response.Name)
+		assert.Equal(t, "#Chassis.v1_0_0.Chassis", response.OdataType)
+		assert.Equal(t, "Enabled", response.Status.State)
+		assert.Equal(t, "OK", response.Status.Health)
+		assert.Equal(t, "RackMount", response.ChassisType)
+		// ComputerSystems should be empty due to nil KubeVirt client
+		assert.Nil(t, response.Links.ComputerSystems)
+	})
+}
+
+// TestHandleSystemsCollection tests the handleSystemsCollection HTTP handler
+func TestHandleSystemsCollection(t *testing.T) {
+	server := testServer(t)
+
+	// Test 1: Valid GET request to systems collection
+	t.Run("Valid GET request", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/redfish/v1/Systems", nil)
+		req.Header.Set("Authorization", "Basic dGVzdHVzZXI6dGVzdHBhc3M=") // testuser:testpass
+
+		// Set up authentication context manually for testing
+		user := &auth.User{
+			Username: "testuser",
+			Password: "testpass",
+			Chassis:  []string{"chassis1"},
+		}
+		authCtx := &auth.AuthContext{
+			User:    user,
+			Chassis: "",
+		}
+		ctx := logger.WithAuth(req.Context(), authCtx)
+		req = req.WithContext(ctx)
+
+		w := httptest.NewRecorder()
+
+		server.handleSystemsCollection(w, req)
+
+		// Verify response - expect success with empty collection
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var response redfish.ComputerSystemCollection
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "/redfish/v1/Systems", response.OdataID)
+		assert.Equal(t, "Computer System Collection", response.Name)
+		assert.Equal(t, "#ComputerSystemCollection.ComputerSystemCollection", response.OdataType)
+		// Members should be empty due to nil KubeVirt client
+		assert.Equal(t, 0, response.MembersCount)
+		assert.Len(t, response.Members, 0)
+	})
 }

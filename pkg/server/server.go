@@ -588,12 +588,12 @@ func (s *Server) handleChassisCollection(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleChassis(w http.ResponseWriter, r *http.Request) {
 	// Extract chassis name from path
 	pathParts := strings.Split(r.URL.Path, "/")
-	if len(pathParts) < 4 {
+	if len(pathParts) < 5 {
 		s.sendNotFound(w, "Invalid chassis path")
 		return
 	}
 
-	chassisName := pathParts[3]
+	chassisName := pathParts[4]
 	if chassisName == "" {
 		s.sendNotFound(w, "Chassis name required")
 		return
@@ -618,9 +618,15 @@ func (s *Server) handleChassis(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get VMs in this chassis
-	vms, err := s.kubevirtClient.ListVMsWithSelector(chassisConfig.Namespace, chassisConfig.VMSelector)
-	if err != nil {
-		logger.Error("Failed to list VMs for chassis %s: %v", chassisName, err)
+	var vms []string
+	if s.kubevirtClient != nil {
+		vms, err = s.kubevirtClient.ListVMsWithSelector(chassisConfig.Namespace, chassisConfig.VMSelector)
+		if err != nil {
+			logger.Error("Failed to list VMs for chassis %s: %v", chassisName, err)
+			vms = []string{}
+		}
+	} else {
+		logger.Error("KubeVirt client is nil, cannot list VMs for chassis %s", chassisName)
 		vms = []string{}
 	}
 

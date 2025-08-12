@@ -806,22 +806,22 @@ func TestClient_ListVMs(t *testing.T) {
 func TestClient_ListVMsWithSelector(t *testing.T) {
 	// Create a mock client
 	client := &Client{
-		dynamicClient: nil, // Will cause panic
+		dynamicClient: nil, // Will cause error
 	}
-
-	// Test list VMs with selector failure - this will panic, so we need to recover
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when dynamic client is nil")
-		}
-	}()
 
 	selector := &VMSelectorConfig{
 		Labels: map[string]string{"app": "test"},
 		Names:  []string{"vm1", "vm2"},
 	}
-	client.ListVMsWithSelector("test-namespace", selector)
-	t.Error("Expected panic, but function completed normally")
+
+	// Test list VMs with selector failure - should return error, not panic
+	vms, err := client.ListVMsWithSelector("test-namespace", selector)
+	if err == nil {
+		t.Error("Expected error when dynamic client is nil")
+	}
+	if vms != nil {
+		t.Error("Expected nil result when dynamic client is nil")
+	}
 }
 
 func TestClient_GetVM(t *testing.T) {

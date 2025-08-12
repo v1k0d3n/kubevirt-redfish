@@ -289,6 +289,16 @@ func (c *Client) ListVMs(namespace string) ([]string, error) {
 
 // ListVMsWithSelector lists VirtualMachines in a namespace with optional label selector and name filtering
 func (c *Client) ListVMsWithSelector(namespace string, vmSelector *VMSelectorConfig) ([]string, error) {
+	start := time.Now()
+	defer func() {
+		c.trackOperation("ListVMsWithSelector", time.Since(start))
+	}()
+
+	// Check if dynamicClient is initialized
+	if c.dynamicClient == nil {
+		return nil, fmt.Errorf("dynamic client is not initialized")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 
