@@ -1488,7 +1488,7 @@ func (s *Server) handleBootUpdate(w http.ResponseWriter, r *http.Request, system
 	w.Header().Set("ETag", system.OdataEtag)
 	s.setCacheHeaders(w, "resource")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(system)
+	s.encodeJSONResponse(w, system)
 
 	// Invalidate related cache entries
 	s.responseCache.Invalidate(fmt.Sprintf("Systems/%s", systemName))
@@ -1567,7 +1567,7 @@ func (s *Server) handleManager(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("ETag", manager["@odata.etag"].(string))
 	s.setCacheHeaders(w, "resource")
-	json.NewEncoder(w).Encode(manager)
+	s.encodeJSONResponse(w, manager)
 }
 
 // handleTask handles task endpoints for asynchronous operations.
@@ -1802,7 +1802,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
-	json.NewEncoder(w).Encode(response)
+	s.encodeJSONResponse(w, response)
 }
 
 // validateMethod validates that the HTTP method is supported for the given endpoint.
@@ -1843,7 +1843,7 @@ func (s *Server) validateMethod(w http.ResponseWriter, r *http.Request, allowedM
 		},
 	}
 
-	json.NewEncoder(w).Encode(errorResponse)
+	s.encodeJSONResponse(w, errorResponse)
 	return false
 }
 
@@ -1855,7 +1855,7 @@ func (s *Server) validateMethod(w http.ResponseWriter, r *http.Request, allowedM
 // - data: Data to serialize as JSON
 func (s *Server) sendJSON(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data)
+	s.encodeJSONResponse(w, data)
 }
 
 // sendOptimizedJSON sends a JSON response with optimized serialization.
@@ -2009,7 +2009,7 @@ func (s *Server) sendRedfishError(w http.ResponseWriter, r *http.Request, err er
 		},
 	}
 
-	json.NewEncoder(w).Encode(errorResponse)
+	s.encodeJSONResponse(w, errorResponse)
 }
 
 // sendNotFound sends a 404 Not Found response.

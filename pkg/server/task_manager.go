@@ -225,7 +225,9 @@ func (w *Worker) processJob(job *Job) {
 
 	// Update task state to running
 	logger.Debug("DEBUG: Worker %d updating task %s state to Running", w.ID, job.TaskID)
-	w.taskMgr.UpdateTaskState(job.TaskID, redfish.TaskStateRunning, "OK", "Processing started")
+	if err := w.taskMgr.UpdateTaskState(job.TaskID, redfish.TaskStateRunning, "OK", "Processing started"); err != nil {
+		logger.Error("Failed to update task state for job %s: %v", job.ID, err)
+	}
 
 	// Process the job based on type
 	var err error
@@ -272,12 +274,16 @@ func (w *Worker) processJob(job *Job) {
 			})
 		} else {
 			logger.Debug("DEBUG: Worker %d job %s failed after %d retries, marking task as failed", w.ID, job.ID, job.MaxRetries)
-			w.taskMgr.FailTask(job.TaskID, fmt.Sprintf("Job failed after %d retries: %v", job.MaxRetries, err))
+			if taskErr := w.taskMgr.FailTask(job.TaskID, fmt.Sprintf("Job failed after %d retries: %v", job.MaxRetries, err)); taskErr != nil {
+				logger.Error("Failed to mark task %s as failed: %v", job.TaskID, taskErr)
+			}
 		}
 	} else {
 		logger.Info("Worker %d completed job %s successfully in %v", w.ID, job.ID, duration)
 		logger.Debug("DEBUG: Worker %d job %s completed successfully in %v", w.ID, job.ID, duration)
-		w.taskMgr.CompleteTask(job.TaskID, "Job completed successfully")
+		if taskErr := w.taskMgr.CompleteTask(job.TaskID, "Job completed successfully"); taskErr != nil {
+			logger.Error("Failed to mark task %s as completed: %v", job.TaskID, taskErr)
+		}
 	}
 }
 
@@ -301,7 +307,9 @@ func (w *Worker) processVirtualMediaInsert(job *Job) error {
 
 	// Update progress
 	logger.Debug("DEBUG: Worker %d updating task progress to 'Starting virtual media insertion'", w.ID)
-	w.taskMgr.UpdateTaskProgress(job.TaskID, "Starting virtual media insertion")
+	if err := w.taskMgr.UpdateTaskProgress(job.TaskID, "Starting virtual media insertion"); err != nil {
+		logger.Error("Failed to update task progress for job %s: %v", job.ID, err)
+	}
 
 	// Perform the actual insertion using KubeVirt client
 	logger.Debug("DEBUG: Worker %d calling kubevirtClient.InsertVirtualMedia", w.ID)
@@ -313,36 +321,50 @@ func (w *Worker) processVirtualMediaInsert(job *Job) error {
 	}
 
 	logger.Debug("DEBUG: Worker %d virtual media insertion completed successfully", w.ID)
-	w.taskMgr.UpdateTaskProgress(job.TaskID, "Virtual media insertion completed successfully")
+	if err := w.taskMgr.UpdateTaskProgress(job.TaskID, "Virtual media insertion completed successfully"); err != nil {
+		logger.Error("Failed to update task progress for job %s: %v", job.ID, err)
+	}
 
 	// AUTOMATION: Set boot order to prioritize CD-ROM after successful insertion
 	logger.Debug("DEBUG: Worker %d setting boot order to prioritize CD-ROM for VM %s/%s", w.ID, namespace, vmName)
-	w.taskMgr.UpdateTaskProgress(job.TaskID, "Setting boot order to prioritize CD-ROM")
+	if err := w.taskMgr.UpdateTaskProgress(job.TaskID, "Setting boot order to prioritize CD-ROM"); err != nil {
+		logger.Error("Failed to update task progress for job %s: %v", job.ID, err)
+	}
 
 	err = w.taskMgr.kubevirtClient.SetBootOrder(namespace, vmName, "Cd")
 	if err != nil {
 		logger.Error("Failed to set boot order for VM %s/%s: %v", namespace, vmName, err)
 		// Don't fail the entire operation if boot order setting fails
 		logger.Debug("DEBUG: Worker %d boot order setting failed for VM %s/%s: %v (continuing anyway)", w.ID, namespace, vmName, err)
-		w.taskMgr.UpdateTaskProgress(job.TaskID, "Warning: Boot order setting failed, but virtual media insertion succeeded")
+		if taskErr := w.taskMgr.UpdateTaskProgress(job.TaskID, "Warning: Boot order setting failed, but virtual media insertion succeeded"); taskErr != nil {
+			logger.Error("Failed to update task progress for job %s: %v", job.ID, taskErr)
+		}
 	} else {
 		logger.Debug("DEBUG: Worker %d boot order set successfully for VM %s/%s", w.ID, namespace, vmName)
-		w.taskMgr.UpdateTaskProgress(job.TaskID, "Boot order set to prioritize CD-ROM")
+		if taskErr := w.taskMgr.UpdateTaskProgress(job.TaskID, "Boot order set to prioritize CD-ROM"); taskErr != nil {
+			logger.Error("Failed to update task progress for job %s: %v", job.ID, taskErr)
+		}
 	}
 
 	// AUTOMATION: Restart the VM to boot from the new ISO
 	logger.Debug("DEBUG: Worker %d restarting VM %s/%s to boot from new ISO", w.ID, namespace, vmName)
-	w.taskMgr.UpdateTaskProgress(job.TaskID, "Restarting VM to boot from new ISO")
+	if err := w.taskMgr.UpdateTaskProgress(job.TaskID, "Restarting VM to boot from new ISO"); err != nil {
+		logger.Error("Failed to update task progress for job %s: %v", job.ID, err)
+	}
 
 	err = w.taskMgr.kubevirtClient.SetVMPowerState(namespace, vmName, "ForceRestart")
 	if err != nil {
 		logger.Error("Failed to restart VM %s/%s: %v", namespace, vmName, err)
 		// Don't fail the entire operation if restart fails
 		logger.Debug("DEBUG: Worker %d VM restart failed for VM %s/%s: %v (continuing anyway)", w.ID, namespace, vmName, err)
-		w.taskMgr.UpdateTaskProgress(job.TaskID, "Warning: VM restart failed, but virtual media insertion succeeded")
+		if taskErr := w.taskMgr.UpdateTaskProgress(job.TaskID, "Warning: VM restart failed, but virtual media insertion succeeded"); taskErr != nil {
+			logger.Error("Failed to update task progress for job %s: %v", job.ID, taskErr)
+		}
 	} else {
 		logger.Debug("DEBUG: Worker %d VM restart initiated successfully for VM %s/%s", w.ID, namespace, vmName)
-		w.taskMgr.UpdateTaskProgress(job.TaskID, "VM restart initiated successfully")
+		if taskErr := w.taskMgr.UpdateTaskProgress(job.TaskID, "VM restart initiated successfully"); taskErr != nil {
+			logger.Error("Failed to update task progress for job %s: %v", job.ID, taskErr)
+		}
 	}
 
 	return nil
@@ -360,7 +382,9 @@ func (w *Worker) processVirtualMediaEject(job *Job) error {
 	mediaID := payload["mediaID"]
 
 	// Update progress
-	w.taskMgr.UpdateTaskProgress(job.TaskID, "Starting virtual media ejection")
+	if err := w.taskMgr.UpdateTaskProgress(job.TaskID, "Starting virtual media ejection"); err != nil {
+		logger.Error("Failed to update task progress for job %s: %v", job.ID, err)
+	}
 
 	// Perform the actual ejection using KubeVirt client
 	err := w.taskMgr.kubevirtClient.EjectVirtualMedia(namespace, vmName, mediaID)
@@ -369,7 +393,9 @@ func (w *Worker) processVirtualMediaEject(job *Job) error {
 		return fmt.Errorf("failed to eject virtual media: %w", err)
 	}
 
-	w.taskMgr.UpdateTaskProgress(job.TaskID, "Virtual media ejection completed successfully")
+	if err := w.taskMgr.UpdateTaskProgress(job.TaskID, "Virtual media ejection completed successfully"); err != nil {
+		logger.Error("Failed to update task progress for job %s: %v", job.ID, err)
+	}
 
 	return nil
 }
@@ -386,12 +412,16 @@ func (w *Worker) processPowerAction(job *Job) error {
 	_ = payload["action"]    // Will be used when integrating with KubeVirt client
 
 	// Update progress
-	w.taskMgr.UpdateTaskProgress(job.TaskID, fmt.Sprintf("Executing power action: %s", payload["action"]))
+	if err := w.taskMgr.UpdateTaskProgress(job.TaskID, fmt.Sprintf("Executing power action: %s", payload["action"])); err != nil {
+		logger.Error("Failed to update task progress for job %s: %v", job.ID, err)
+	}
 
 	// Perform the power action
 	time.Sleep(500 * time.Millisecond) // Simulate work
 
-	w.taskMgr.UpdateTaskProgress(job.TaskID, "Power action completed")
+	if err := w.taskMgr.UpdateTaskProgress(job.TaskID, "Power action completed"); err != nil {
+		logger.Error("Failed to update task progress for job %s: %v", job.ID, err)
+	}
 
 	return nil
 }
@@ -406,12 +436,16 @@ func (w *Worker) processBootUpdate(job *Job) error {
 	_ = payload // Will be used when integrating with KubeVirt client
 
 	// Update progress
-	w.taskMgr.UpdateTaskProgress(job.TaskID, "Updating boot configuration")
+	if err := w.taskMgr.UpdateTaskProgress(job.TaskID, "Updating boot configuration"); err != nil {
+		logger.Error("Failed to update task progress for job %s: %v", job.ID, err)
+	}
 
 	// Perform the boot update
 	time.Sleep(1 * time.Second) // Simulate work
 
-	w.taskMgr.UpdateTaskProgress(job.TaskID, "Boot configuration updated")
+	if err := w.taskMgr.UpdateTaskProgress(job.TaskID, "Boot configuration updated"); err != nil {
+		logger.Error("Failed to update task progress for job %s: %v", job.ID, err)
+	}
 
 	return nil
 }

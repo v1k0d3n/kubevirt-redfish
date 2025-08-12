@@ -349,7 +349,9 @@ func (orw *OptimizedResponseWriter) Flush() error {
 	if orw.statusCode != http.StatusOK {
 		// Don't optimize error responses
 		orw.ResponseWriter.WriteHeader(orw.statusCode)
-		orw.ResponseWriter.Write(orw.buffer.Bytes())
+		if _, err := orw.ResponseWriter.Write(orw.buffer.Bytes()); err != nil {
+			logger.Error("Failed to write error response: %v", err)
+		}
 		return nil
 	}
 

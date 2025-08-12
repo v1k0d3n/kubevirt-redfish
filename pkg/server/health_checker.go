@@ -260,7 +260,9 @@ func (hc *HealthChecker) runPeriodicChecks() {
 		// Check if it's time to run this check
 		if now.Sub(check.LastCheck) >= check.Interval {
 			go func(name string, check *HealthCheck) {
-				hc.runCheck(check)
+				if err := hc.runCheck(check); err != nil {
+					logger.Error("Health check %s failed: %v", name, err)
+				}
 			}(name, check)
 		}
 	}
