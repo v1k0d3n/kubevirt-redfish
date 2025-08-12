@@ -499,6 +499,11 @@ func (c *Client) SetVMPowerState(namespace, name, state string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 
+	// Check if dynamic client is available
+	if c.dynamicClient == nil {
+		return fmt.Errorf("dynamic client is not initialized")
+	}
+
 	// Debug: Log power state change attempt
 	logger.DebugStructured("Attempting power state change", map[string]interface{}{
 		"operation":    "set_vm_power_state",
@@ -567,15 +572,18 @@ func (c *Client) SetVMPowerState(namespace, name, state string) error {
 			"operation":      "force_stop_vm",
 			"namespace":      namespace,
 			"resource":       name,
-			"method":         "patch_runstrategy_and_annotation",
+			"method":         "patch_runstrategy_annotation_and_grace_period",
 			"target_state":   "Halted",
 			"force_stop":     true,
+			"grace_period":   0,
 		})
 
-		// Force stop the VM using runStrategy and force-stop annotation
+		// Force stop the VM using runStrategy, force-stop annotation, and zero grace period
+		// This mirrors the behavior of: virtctl stop --grace-period 0 --force <vm name>
 		patch := []byte(`[
 			{"op": "replace", "path": "/spec/runStrategy", "value": "Halted"},
-			{"op": "add", "path": "/metadata/annotations/kubevirt.io~1force-stop", "value": "true"}
+			{"op": "add", "path": "/metadata/annotations/kubevirt.io~1force-stop", "value": "true"},
+			{"op": "replace", "path": "/spec/terminationGracePeriodSeconds", "value": 0}
 		]`)
 
 		// Debug: Log before making the API call
@@ -656,10 +664,11 @@ func (c *Client) SetVMPowerState(namespace, name, state string) error {
 			"method":         "force_stop_then_start",
 		})
 
-		// Force restart the VM by force stopping and starting
+		// Force restart the VM by force stopping (with zero grace period) and starting
 		stopPatch := []byte(`[
 			{"op": "replace", "path": "/spec/runStrategy", "value": "Halted"},
-			{"op": "add", "path": "/metadata/annotations/kubevirt.io~1force-stop", "value": "true"}
+			{"op": "add", "path": "/metadata/annotations/kubevirt.io~1force-stop", "value": "true"},
+			{"op": "replace", "path": "/spec/terminationGracePeriodSeconds", "value": 0}
 		]`)
 
 		// Debug: Log before making the stop API call
