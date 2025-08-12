@@ -1534,3 +1534,292 @@ func TestHandleTask(t *testing.T) {
 		assert.Contains(t, response["error"].(map[string]interface{})["message"], "Method POST not allowed")
 	})
 }
+
+// TestHandleSystem tests the handleSystem HTTP handler
+func TestHandleSystem(t *testing.T) {
+	server := testServer(t)
+
+	// Test 1: Valid GET request to system
+	t.Run("Valid GET request", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/redfish/v1/Systems/test-vm", nil)
+		req.Header.Set("Authorization", "Basic dGVzdHVzZXI6dGVzdHBhc3M=") // testuser:testpass
+
+		// Set up authentication context manually for testing
+		user := &auth.User{
+			Username: "testuser",
+			Password: "testpass",
+			Chassis:  []string{"chassis1"},
+		}
+		authCtx := &auth.AuthContext{
+			User:    user,
+			Chassis: "",
+		}
+		ctx := logger.WithAuth(req.Context(), authCtx)
+		req = req.WithContext(ctx)
+
+		w := httptest.NewRecorder()
+
+		server.handleSystem(w, req)
+
+		// Debug: Let's see what the actual response is
+		t.Logf("Response status: %d", w.Code)
+		t.Logf("Response body: %s", w.Body.String())
+
+		// Verify response - expect 404 since VM doesn't exist in test environment
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "Base.1.0.ResourceNotFound", response["error"].(map[string]interface{})["code"])
+		assert.Contains(t, response["error"].(map[string]interface{})["message"], "Resource not found")
+	})
+
+	// Test 2: Invalid path - too short
+	t.Run("Invalid path - too short", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/redfish/v1/Systems", nil)
+		w := httptest.NewRecorder()
+
+		server.handleSystem(w, req)
+
+		// Verify response
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "Base.1.0.ResourceNotFound", response["error"].(map[string]interface{})["code"])
+		assert.Contains(t, response["error"].(map[string]interface{})["message"], "Resource not found")
+	})
+
+	// Test 3: Empty system name
+	t.Run("Empty system name", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/redfish/v1/Systems/", nil)
+		w := httptest.NewRecorder()
+
+		server.handleSystem(w, req)
+
+		// Verify response
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "Base.1.0.ResourceNotFound", response["error"].(map[string]interface{})["code"])
+		assert.Contains(t, response["error"].(map[string]interface{})["message"], "Resource not found")
+	})
+
+	// Test 4: Invalid HTTP method
+	t.Run("Invalid HTTP method", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/redfish/v1/Systems/test-vm", nil)
+		w := httptest.NewRecorder()
+
+		server.handleSystem(w, req)
+
+		// Verify response
+		assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "Base.1.0.GeneralError", response["error"].(map[string]interface{})["code"])
+		assert.Contains(t, response["error"].(map[string]interface{})["message"], "Method POST not allowed")
+	})
+
+	// Test 5: Power action routing
+	t.Run("Power action routing", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/redfish/v1/Systems/test-vm/Actions/ComputerSystem.Reset", strings.NewReader(`{"ResetType": "On"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		server.handleSystem(w, req)
+
+		// Debug: Let's see what the actual response is
+		t.Logf("Power action response status: %d", w.Code)
+		t.Logf("Power action response body: %s", w.Body.String())
+
+		// Should route to handlePowerAction which will return 403 due to no auth context
+		assert.Equal(t, http.StatusForbidden, w.Code)
+	})
+
+	// Test 6: Boot update routing
+	t.Run("Boot update routing", func(t *testing.T) {
+		req := httptest.NewRequest("PATCH", "/redfish/v1/Systems/test-vm", strings.NewReader(`{"Boot": {"BootSourceOverrideEnabled": "Once"}}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		server.handleSystem(w, req)
+
+		// Debug: Let's see what the actual response is
+		t.Logf("Boot update response status: %d", w.Code)
+		t.Logf("Boot update response body: %s", w.Body.String())
+
+		// Should route to handleBootUpdate which will return 403 due to no auth context
+		assert.Equal(t, http.StatusForbidden, w.Code)
+	})
+
+	// Test 7: Virtual media routing
+	t.Run("Virtual media routing", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/redfish/v1/Systems/test-vm/VirtualMedia", nil)
+		w := httptest.NewRecorder()
+
+		server.handleSystem(w, req)
+
+		// Debug: Let's see what the actual response is
+		t.Logf("Virtual media response status: %d", w.Code)
+		t.Logf("Virtual media response body: %s", w.Body.String())
+
+		// Should route to handleVirtualMediaRequest which will return 403 due to no auth context
+		assert.Equal(t, http.StatusForbidden, w.Code)
+	})
+}
+
+// TestHandlePowerAction tests the handlePowerAction HTTP handler
+func TestHandlePowerAction(t *testing.T) {
+	server := testServer(t)
+
+	// Test 1: Valid power action request
+	t.Run("Valid power action request", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/redfish/v1/Systems/test-vm/Actions/ComputerSystem.Reset", strings.NewReader(`{"ResetType": "On"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Basic dGVzdHVzZXI6dGVzdHBhc3M=") // testuser:testpass
+
+		// Set up authentication context manually for testing
+		user := &auth.User{
+			Username: "testuser",
+			Password: "testpass",
+			Chassis:  []string{"chassis1"},
+		}
+		authCtx := &auth.AuthContext{
+			User:    user,
+			Chassis: "",
+		}
+		ctx := logger.WithAuth(req.Context(), authCtx)
+		req = req.WithContext(ctx)
+
+		w := httptest.NewRecorder()
+
+		server.handlePowerAction(w, req, "test-vm")
+
+		// Debug: Let's see what the actual response is
+		t.Logf("Response status: %d", w.Code)
+		t.Logf("Response body: %s", w.Body.String())
+
+		// Verify response - expect 404 since VM doesn't exist in test environment
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "Base.1.0.ResourceNotFound", response["error"].(map[string]interface{})["code"])
+		assert.Contains(t, response["error"].(map[string]interface{})["message"], "Resource not found")
+	})
+
+	// Test 2: Invalid request body
+	t.Run("Invalid request body", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/redfish/v1/Systems/test-vm/Actions/ComputerSystem.Reset", strings.NewReader(`{"Invalid": "json"`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		server.handlePowerAction(w, req, "test-vm")
+
+		// Verify response
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "Base.1.0.GeneralError", response["error"].(map[string]interface{})["code"])
+		assert.Contains(t, response["error"].(map[string]interface{})["message"], "Invalid request body")
+	})
+
+	// Test 3: Unsupported reset type
+	t.Run("Unsupported reset type", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/redfish/v1/Systems/test-vm/Actions/ComputerSystem.Reset", strings.NewReader(`{"ResetType": "InvalidType"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Basic dGVzdHVzZXI6dGVzdHBhc3M=") // testuser:testpass
+
+		// Set up authentication context manually for testing
+		user := &auth.User{
+			Username: "testuser",
+			Password: "testpass",
+			Chassis:  []string{"chassis1"},
+		}
+		authCtx := &auth.AuthContext{
+			User:    user,
+			Chassis: "",
+		}
+		ctx := logger.WithAuth(req.Context(), authCtx)
+		req = req.WithContext(ctx)
+
+		w := httptest.NewRecorder()
+
+		server.handlePowerAction(w, req, "test-vm")
+
+		// Verify response - expect 404 since VM doesn't exist in test environment
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "Base.1.0.ResourceNotFound", response["error"].(map[string]interface{})["code"])
+		assert.Contains(t, response["error"].(map[string]interface{})["message"], "Resource not found")
+	})
+
+	// Test 4: No authentication context
+	t.Run("No authentication context", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/redfish/v1/Systems/test-vm/Actions/ComputerSystem.Reset", strings.NewReader(`{"ResetType": "On"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		server.handlePowerAction(w, req, "test-vm")
+
+		// Verify response
+		assert.Equal(t, http.StatusForbidden, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "Base.1.0.GeneralError", response["error"].(map[string]interface{})["code"])
+		assert.Contains(t, response["error"].(map[string]interface{})["message"], "Authentication required")
+	})
+
+	// Test 5: Different reset types
+	t.Run("Different reset types", func(t *testing.T) {
+		resetTypes := []string{"ForceOff", "GracefulShutdown", "ForceRestart", "GracefulRestart", "Pause", "Resume"}
+
+		for _, resetType := range resetTypes {
+			t.Run(resetType, func(t *testing.T) {
+				req := httptest.NewRequest("POST", "/redfish/v1/Systems/test-vm/Actions/ComputerSystem.Reset", strings.NewReader(fmt.Sprintf(`{"ResetType": "%s"}`, resetType)))
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Authorization", "Basic dGVzdHVzZXI6dGVzdHBhc3M=") // testuser:testpass
+
+				// Set up authentication context manually for testing
+				user := &auth.User{
+					Username: "testuser",
+					Password: "testpass",
+					Chassis:  []string{"chassis1"},
+				}
+				authCtx := &auth.AuthContext{
+					User:    user,
+					Chassis: "",
+				}
+				ctx := logger.WithAuth(req.Context(), authCtx)
+				req = req.WithContext(ctx)
+
+				w := httptest.NewRecorder()
+
+				server.handlePowerAction(w, req, "test-vm")
+
+				// Verify response - expect 404 since VM doesn't exist in test environment
+				assert.Equal(t, http.StatusNotFound, w.Code)
+
+				var response map[string]interface{}
+				err := json.Unmarshal(w.Body.Bytes(), &response)
+				assert.NoError(t, err)
+				assert.Equal(t, "Base.1.0.ResourceNotFound", response["error"].(map[string]interface{})["code"])
+				assert.Contains(t, response["error"].(map[string]interface{})["message"], "Resource not found")
+			})
+		}
+	})
+}

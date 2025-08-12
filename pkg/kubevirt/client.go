@@ -362,6 +362,11 @@ func (c *Client) GetVM(namespace, name string) (*unstructured.Unstructured, erro
 		c.trackOperation("GetVM", time.Since(start))
 	}()
 
+	// Check if dynamicClient is initialized
+	if c.dynamicClient == nil {
+		return nil, fmt.Errorf("dynamic client is not initialized")
+	}
+
 	var vm *unstructured.Unstructured
 
 	err := c.retryWithBackoff(fmt.Sprintf("GetVM %s/%s", namespace, name), func() error {
@@ -389,6 +394,11 @@ func (c *Client) GetVM(namespace, name string) (*unstructured.Unstructured, erro
 
 // GetVMPowerState gets the power state of a VirtualMachine
 func (c *Client) GetVMPowerState(namespace, name string) (string, error) {
+	// Check if dynamicClient is initialized
+	if c.dynamicClient == nil {
+		return "Unknown", fmt.Errorf("dynamic client is not initialized")
+	}
+
 	// Fetch the VM resource
 	gvr := schema.GroupVersionResource{
 		Group:    "kubevirt.io",
@@ -1088,6 +1098,11 @@ func (c *Client) executeUnpauseRequestWithDynamicClient(ctx context.Context, nam
 
 // GetVMNetworkInterfaces gets network interfaces of a VirtualMachine
 func (c *Client) GetVMNetworkInterfaces(namespace, name string) ([]string, error) {
+	// Check if dynamicClient is initialized
+	if c.dynamicClient == nil {
+		return nil, fmt.Errorf("dynamic client is not initialized")
+	}
+
 	gvr := schema.GroupVersionResource{
 		Group:    "kubevirt.io",
 		Version:  "v1",
@@ -1988,6 +2003,11 @@ func stringPtr(s string) *string {
 
 // getUploadProxyURL gets the CDI upload proxy URL using configuration-driven service discovery
 func (c *Client) getUploadProxyURL() (string, error) {
+	// Check if kubernetesClient is initialized
+	if c.kubernetesClient == nil {
+		return "", fmt.Errorf("kubernetes client is not initialized")
+	}
+
 	correlationID := logger.GetCorrelationID(context.Background())
 
 	// Get CDI namespaces from appConfig using reflection to avoid import cycle
@@ -2156,6 +2176,11 @@ func (c *Client) fetchServerCertificate(host string) (string, error) {
 
 // IsDataVolumeReady checks if a DataVolume is in Ready state
 func (c *Client) IsDataVolumeReady(namespace, name string) (bool, error) {
+	// Check if dynamicClient is initialized
+	if c.dynamicClient == nil {
+		return false, fmt.Errorf("dynamic client is not initialized")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 
@@ -2671,6 +2696,11 @@ func (c *Client) getKubeVirtConfig() (apiVersion string, timeout int, allowInsec
 
 // cleanupExistingDataVolume removes an existing DataVolume if it exists and is in a failed state
 func (c *Client) cleanupExistingDataVolume(namespace, dataVolumeName string) error {
+	// Check if dynamicClient is initialized
+	if c.dynamicClient == nil {
+		return fmt.Errorf("dynamic client is not initialized")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 

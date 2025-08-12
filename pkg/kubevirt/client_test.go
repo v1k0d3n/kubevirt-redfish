@@ -462,238 +462,207 @@ func TestClient_GetNamespaceInfo(t *testing.T) {
 func TestClient_GetVMMemory(t *testing.T) {
 	// Create a mock client
 	client := &Client{
-		dynamicClient: nil, // Will cause panic in GetVM
+		dynamicClient: nil, // Will cause error in GetVM
 	}
 
-	// Test with nil VM (GetVM will panic, so we need to recover)
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when dynamic client is nil")
-		}
-	}()
-
-	//nolint:errcheck // We expect this to panic, not return an error
-	client.GetVMMemory("test-namespace", "test-vm")
-	t.Error("Expected panic, but function completed normally")
+	// Test memory retrieval failure - should return default value, not error
+	memory, err := client.GetVMMemory("test-namespace", "test-vm")
+	if err != nil {
+		t.Errorf("Expected no error, got: %v", err)
+	}
+	if memory != 2.0 {
+		t.Errorf("Expected default memory 2.0, got: %f", memory)
+	}
 }
 
 func TestClient_GetVMCPU(t *testing.T) {
 	// Create a mock client
 	client := &Client{
-		dynamicClient: nil, // Will cause panic in GetVM
+		dynamicClient: nil, // Will cause error in GetVM
 	}
 
-	// Test with nil VM (GetVM will panic, so we need to recover)
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when dynamic client is nil")
-		}
-	}()
-
-	//nolint:errcheck // We expect this to panic, not return an error
-	client.GetVMCPU("test-namespace", "test-vm")
-	t.Error("Expected panic, but function completed normally")
+	// Test CPU retrieval failure - should return default value, not error
+	cpu, err := client.GetVMCPU("test-namespace", "test-vm")
+	if err != nil {
+		t.Errorf("Expected no error, got: %v", err)
+	}
+	if cpu != 1 {
+		t.Errorf("Expected default CPU 1, got: %d", cpu)
+	}
 }
 
 func TestClient_GetUploadProxyURL(t *testing.T) {
 	// Create a mock client
 	client := &Client{
-		kubernetesClient: nil, // Will cause panic
+		kubernetesClient: nil, // Will cause error
 	}
 
-	// Test upload proxy URL retrieval failure - this will panic, so we need to recover
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when kubernetes client is nil")
-		}
-	}()
-
-	//nolint:errcheck // We expect this to panic, not return an error
-	client.getUploadProxyURL()
-	t.Error("Expected panic, but function completed normally")
+	// Test upload proxy URL retrieval failure - should return error, not panic
+	url, err := client.getUploadProxyURL()
+	if err == nil {
+		t.Error("Expected error when kubernetes client is nil")
+	}
+	if url != "" {
+		t.Error("Expected empty URL when kubernetes client is nil")
+	}
 }
 
 func TestClient_IsDataVolumeReady(t *testing.T) {
 	// Create a mock client
 	client := &Client{
-		dynamicClient: nil, // Will cause panic
+		dynamicClient: nil, // Will cause error
 	}
 
-	// Test data volume ready check failure - this will panic, so we need to recover
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when dynamic client is nil")
-		}
-	}()
-
-	//nolint:errcheck // We expect this to panic, not return an error
-	client.IsDataVolumeReady("test-namespace", "test-dv")
-	t.Error("Expected panic, but function completed normally")
+	// Test data volume ready check failure - should return error, not panic
+	ready, err := client.IsDataVolumeReady("test-namespace", "test-dv")
+	if err == nil {
+		t.Error("Expected error when dynamic client is nil")
+	}
+	if ready {
+		t.Error("Expected false when dynamic client is nil")
+	}
 }
 
 func TestClient_CleanupExistingDataVolume(t *testing.T) {
 	// Create a mock client
 	client := &Client{
-		dynamicClient: nil, // Will cause panic
+		dynamicClient: nil, // Will cause error
 	}
 
-	// Test cleanup failure - this will panic, so we need to recover
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when dynamic client is nil")
-		}
-	}()
-
-	//nolint:errcheck // We expect this to panic, not return an error
-	client.cleanupExistingDataVolume("test-namespace", "test-dv")
-	t.Error("Expected panic, but function completed normally")
+	// Test cleanup failure - should return error, not panic
+	err := client.cleanupExistingDataVolume("test-namespace", "test-dv")
+	if err == nil {
+		t.Error("Expected error when dynamic client is nil")
+	}
 }
 
 func TestClient_GetVMNetworkDetails(t *testing.T) {
 	// Create a mock client
 	client := &Client{
-		dynamicClient: nil, // Will cause panic in GetVM
+		dynamicClient: nil, // Will cause error
 	}
 
-	// Test with nil VM (GetVM will panic, so we need to recover)
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when dynamic client is nil")
-		}
-	}()
-
-	//nolint:errcheck // We expect this to panic, not return an error
-	client.GetVMNetworkDetails("test-namespace", "test-vm")
-	t.Error("Expected panic, but function completed normally")
+	// Test network details retrieval failure - should return error, not panic
+	networks, err := client.GetVMNetworkDetails("test-namespace", "test-vm")
+	if err == nil {
+		t.Error("Expected error when dynamic client is nil")
+	}
+	if networks != nil {
+		t.Error("Expected nil networks when dynamic client is nil")
+	}
 }
 
 func TestClient_GetVMStorageDetails(t *testing.T) {
 	// Create a mock client
 	client := &Client{
-		dynamicClient: nil, // Will cause panic in GetVM
+		dynamicClient: nil, // Will cause error in GetVM
 	}
 
-	// Test with nil VM (GetVM will panic, so we need to recover)
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when dynamic client is nil")
-		}
-	}()
-
-	//nolint:errcheck // We expect this to panic, not return an error
-	client.GetVMStorageDetails("test-namespace", "test-vm")
-	t.Error("Expected panic, but function completed normally")
+	// Test storage details retrieval failure - should return error, not panic
+	storage, err := client.GetVMStorageDetails("test-namespace", "test-vm")
+	if err == nil {
+		t.Error("Expected error when dynamic client is nil")
+	}
+	if storage != nil {
+		t.Error("Expected nil storage when dynamic client is nil")
+	}
 }
 
 func TestClient_GetVMNetworkInterfaces(t *testing.T) {
 	// Create a mock client
 	client := &Client{
-		dynamicClient: nil, // Will cause panic in GetVM
+		dynamicClient: nil, // Will cause error in GetVM
 	}
 
-	// Test with nil VM (GetVM will panic, so we need to recover)
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when dynamic client is nil")
-		}
-	}()
-
-	//nolint:errcheck // We expect this to panic, not return an error
-	client.GetVMNetworkInterfaces("test-namespace", "test-vm")
-	t.Error("Expected panic, but function completed normally")
+	// Test network interfaces retrieval failure - should return error, not panic
+	interfaces, err := client.GetVMNetworkInterfaces("test-namespace", "test-vm")
+	if err == nil {
+		t.Error("Expected error when dynamic client is nil")
+	}
+	if interfaces != nil {
+		t.Error("Expected nil interfaces when dynamic client is nil")
+	}
 }
 
 func TestClient_GetVMStorage(t *testing.T) {
 	// Create a mock client
 	client := &Client{
-		dynamicClient: nil, // Will cause panic in GetVM
+		dynamicClient: nil, // Will cause error in GetVM
 	}
 
-	// Test with nil VM (GetVM will panic, so we need to recover)
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when dynamic client is nil")
-		}
-	}()
-
-	//nolint:errcheck // We expect this to panic, not return an error
-	client.GetVMStorage("test-namespace", "test-vm")
-	t.Error("Expected panic, but function completed normally")
+	// Test storage retrieval failure - should return error, not panic
+	storage, err := client.GetVMStorage("test-namespace", "test-vm")
+	if err == nil {
+		t.Error("Expected error when dynamic client is nil")
+	}
+	if storage != nil {
+		t.Error("Expected nil storage when dynamic client is nil")
+	}
 }
 
 func TestClient_GetVMBootOptions(t *testing.T) {
 	// Create a mock client
 	client := &Client{
-		dynamicClient: nil, // Will cause panic in GetVM
+		dynamicClient: nil, // Will cause error in GetVM
 	}
 
-	// Test with nil VM (GetVM will panic, so we need to recover)
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when dynamic client is nil")
-		}
-	}()
-
-	//nolint:errcheck // We expect this to panic, not return an error
-	client.GetVMBootOptions("test-namespace", "test-vm")
-	t.Error("Expected panic, but function completed normally")
+	// Test boot options retrieval failure - should return error, not panic
+	options, err := client.GetVMBootOptions("test-namespace", "test-vm")
+	if err == nil {
+		t.Error("Expected error when dynamic client is nil")
+	}
+	if options != nil {
+		t.Error("Expected nil options when dynamic client is nil")
+	}
 }
 
 func TestClient_SetVMBootOptions(t *testing.T) {
 	// Create a mock client
 	client := &Client{
-		dynamicClient: nil, // Will cause panic in GetVM
+		dynamicClient: nil, // Will cause error in GetVM
 	}
-
-	// Test with nil VM (GetVM will panic, so we need to recover)
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when dynamic client is nil")
-		}
-	}()
 
 	options := map[string]interface{}{
 		"bootOrder": []string{"cdrom", "disk"},
 	}
-	//nolint:errcheck // We expect this to panic, not return an error
-	client.SetVMBootOptions("test-namespace", "test-vm", options)
-	t.Error("Expected panic, but function completed normally")
+
+	// Test boot options setting failure - should return error, not panic
+	err := client.SetVMBootOptions("test-namespace", "test-vm", options)
+	if err == nil {
+		t.Error("Expected error when dynamic client is nil")
+	}
 }
 
 func TestClient_GetVMVirtualMedia(t *testing.T) {
 	// Create a mock client
 	client := &Client{
-		dynamicClient: nil, // Will cause panic in GetVM
+		dynamicClient: nil, // Will cause error in GetVM
 	}
 
-	// Test with nil VM (GetVM will panic, so we need to recover)
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when dynamic client is nil")
-		}
-	}()
-
-	//nolint:errcheck // We expect this to panic, not return an error
-	client.GetVMVirtualMedia("test-namespace", "test-vm")
-	t.Error("Expected panic, but function completed normally")
+	// Test virtual media retrieval failure - should return error, not panic
+	media, err := client.GetVMVirtualMedia("test-namespace", "test-vm")
+	if err == nil {
+		t.Error("Expected error when dynamic client is nil")
+	}
+	if media != nil {
+		t.Error("Expected nil media when dynamic client is nil")
+	}
 }
 
 func TestClient_IsVirtualMediaInserted(t *testing.T) {
 	// Create a mock client
 	client := &Client{
-		dynamicClient: nil, // Will cause panic in GetVM
+		dynamicClient: nil, // Will cause error in GetVM
 	}
 
-	// Test with nil VM (GetVM will panic, so we need to recover)
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when dynamic client is nil")
-		}
-	}()
-
-	//nolint:errcheck // We expect this to panic, not return an error
-	client.IsVirtualMediaInserted("test-namespace", "test-vm", "cdrom0")
-	t.Error("Expected panic, but function completed normally")
+	// Test virtual media check failure - should return error, not panic
+	inserted, err := client.IsVirtualMediaInserted("test-namespace", "test-vm", "cdrom0")
+	if err == nil {
+		t.Error("Expected error when dynamic client is nil")
+	}
+	if inserted {
+		t.Error("Expected false when dynamic client is nil")
+	}
 }
 
 func TestClient_DownloadISO(t *testing.T) {
@@ -716,73 +685,53 @@ func TestClient_DownloadISO(t *testing.T) {
 func TestClient_InsertVirtualMedia(t *testing.T) {
 	// Create a mock client
 	client := &Client{
-		dynamicClient: nil, // Will cause panic in GetVM
+		dynamicClient: nil, // Will cause error in GetVM
 	}
 
-	// Test with invalid parameters - this will panic, so we need to recover
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when dynamic client is nil")
-		}
-	}()
-
-	//nolint:errcheck // We expect this to panic, not return an error
-	client.InsertVirtualMedia("test-namespace", "test-vm", "cdrom0", "http://example.com/iso")
-	t.Error("Expected panic, but function completed normally")
+	// Test virtual media insertion failure - should return error, not panic
+	err := client.InsertVirtualMedia("test-namespace", "test-vm", "cdrom0", "http://example.com/iso")
+	if err == nil {
+		t.Error("Expected error when dynamic client is nil")
+	}
 }
 
 func TestClient_EjectVirtualMedia(t *testing.T) {
 	// Create a mock client
 	client := &Client{
-		dynamicClient: nil, // Will cause panic in GetVM
+		dynamicClient: nil, // Will cause error in GetVM
 	}
 
-	// Test with invalid parameters - this will panic, so we need to recover
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when dynamic client is nil")
-		}
-	}()
-
-	//nolint:errcheck // We expect this to panic, not return an error
-	client.EjectVirtualMedia("test-namespace", "test-vm", "cdrom0")
-	t.Error("Expected panic, but function completed normally")
+	// Test virtual media ejection failure - should return error, not panic
+	err := client.EjectVirtualMedia("test-namespace", "test-vm", "cdrom0")
+	if err == nil {
+		t.Error("Expected error when dynamic client is nil")
+	}
 }
 
 func TestClient_SetBootOrder(t *testing.T) {
 	// Create a mock client
 	client := &Client{
-		dynamicClient: nil, // Will cause panic in GetVM
+		dynamicClient: nil, // Will cause error in GetVM
 	}
 
-	// Test with invalid parameters - this will panic, so we need to recover
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when dynamic client is nil")
-		}
-	}()
-
-	//nolint:errcheck // We expect this to panic, not return an error
-	client.SetBootOrder("test-namespace", "test-vm", "cdrom")
-	t.Error("Expected panic, but function completed normally")
+	// Test boot order setting failure - should return error, not panic
+	err := client.SetBootOrder("test-namespace", "test-vm", "cdrom")
+	if err == nil {
+		t.Error("Expected error when dynamic client is nil")
+	}
 }
 
 func TestClient_SetBootOnce(t *testing.T) {
 	// Create a mock client
 	client := &Client{
-		dynamicClient: nil, // Will cause panic in GetVM
+		dynamicClient: nil, // Will cause error in GetVM
 	}
 
-	// Test with invalid parameters - this will panic, so we need to recover
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when dynamic client is nil")
-		}
-	}()
-
-	//nolint:errcheck // We expect this to panic, not return an error
-	client.SetBootOnce("test-namespace", "test-vm", "cdrom")
-	t.Error("Expected panic, but function completed normally")
+	// Test boot once setting failure - should return error, not panic
+	err := client.SetBootOnce("test-namespace", "test-vm", "cdrom")
+	if err == nil {
+		t.Error("Expected error when dynamic client is nil")
+	}
 }
 
 func TestClient_ListVMs(t *testing.T) {
@@ -827,35 +776,33 @@ func TestClient_ListVMsWithSelector(t *testing.T) {
 func TestClient_GetVM(t *testing.T) {
 	// Create a mock client
 	client := &Client{
-		dynamicClient: nil, // Will cause panic
+		dynamicClient: nil, // Will cause error
 	}
 
-	// Test get VM failure - this will panic, so we need to recover
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when dynamic client is nil")
-		}
-	}()
-
-	client.GetVM("test-namespace", "test-vm")
-	t.Error("Expected panic, but function completed normally")
+	// Test get VM failure - should return error, not panic
+	vm, err := client.GetVM("test-namespace", "test-vm")
+	if err == nil {
+		t.Error("Expected error when dynamic client is nil")
+	}
+	if vm != nil {
+		t.Error("Expected nil VM when dynamic client is nil")
+	}
 }
 
 func TestClient_GetVMPowerState(t *testing.T) {
 	// Create a mock client
 	client := &Client{
-		dynamicClient: nil, // Will cause panic in GetVM
+		dynamicClient: nil, // Will cause error in GetVM
 	}
 
-	// Test with nil VM (GetVM will panic, so we need to recover)
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when dynamic client is nil")
-		}
-	}()
-
-	client.GetVMPowerState("test-namespace", "test-vm")
-	t.Error("Expected panic, but function completed normally")
+	// Test power state retrieval failure - should return error, not panic
+	state, err := client.GetVMPowerState("test-namespace", "test-vm")
+	if err == nil {
+		t.Error("Expected error when dynamic client is nil")
+	}
+	if state != "Unknown" {
+		t.Errorf("Expected 'Unknown' state when dynamic client is nil, got: %s", state)
+	}
 }
 
 func TestClient_SetVMPowerState(t *testing.T) {
@@ -914,18 +861,14 @@ func TestClient_UnpauseVMI(t *testing.T) {
 func TestClient_UploadISOToDataVolume(t *testing.T) {
 	// Create a mock client
 	client := &Client{
-		kubernetesClient: nil, // Will cause panic in getUploadProxyURL
+		kubernetesClient: nil, // Will cause error in getUploadProxyURL
 	}
 
-	// Test with invalid parameters - this will panic, so we need to recover
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when kubernetes client is nil")
-		}
-	}()
-
-	client.uploadISOToDataVolume("test-namespace", "test-dv", "/path/to/iso")
-	t.Error("Expected panic, but function completed normally")
+	// Test upload failure - should return error, not panic
+	err := client.uploadISOToDataVolume("test-namespace", "test-dv", "/path/to/iso")
+	if err == nil {
+		t.Error("Expected error when kubernetes client is nil")
+	}
 }
 
 func TestClient_CopyISOToPVC(t *testing.T) {
@@ -986,35 +929,33 @@ func TestClient_FetchServerCertificate(t *testing.T) {
 func TestClient_GetVMMemory_EdgeCases(t *testing.T) {
 	// Create a mock client
 	client := &Client{
-		dynamicClient: nil, // Will cause panic in GetVM
+		dynamicClient: nil, // Will cause error in GetVM
 	}
 
-	// Test with empty namespace - will panic
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when dynamic client is nil")
-		}
-	}()
-
-	client.GetVMMemory("", "test-vm")
-	t.Error("Expected panic, but function completed normally")
+	// Test with empty namespace - should return default value
+	memory, err := client.GetVMMemory("", "test-vm")
+	if err != nil {
+		t.Errorf("Expected no error, got: %v", err)
+	}
+	if memory != 2.0 {
+		t.Errorf("Expected default memory 2.0, got: %f", memory)
+	}
 }
 
 func TestClient_GetVMCPU_EdgeCases(t *testing.T) {
 	// Create a mock client
 	client := &Client{
-		dynamicClient: nil, // Will cause panic in GetVM
+		dynamicClient: nil, // Will cause error in GetVM
 	}
 
-	// Test with empty namespace - will panic
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when dynamic client is nil")
-		}
-	}()
-
-	client.GetVMCPU("", "test-vm")
-	t.Error("Expected panic, but function completed normally")
+	// Test with empty namespace - should return default value
+	cpu, err := client.GetVMCPU("", "test-vm")
+	if err != nil {
+		t.Errorf("Expected no error, got: %v", err)
+	}
+	if cpu != 1 {
+		t.Errorf("Expected default CPU 1, got: %d", cpu)
+	}
 }
 
 func TestClient_ConcurrentAccess(t *testing.T) {
@@ -1161,18 +1102,19 @@ func TestClient_GetUploadProxyURL_EdgeCases(t *testing.T) {
 
 // Test getUploadProxyURL function with nil kubernetes client
 func TestClient_GetUploadProxyURL_NilKubeClient(t *testing.T) {
-	// Test with nil kubernetes client (should panic)
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic with nil kubernetes client")
-		}
-	}()
-
+	// Test with nil kubernetes client (should return error)
 	client := &Client{
 		kubernetesClient: nil,
 		timeout:          30 * time.Second,
 	}
-	client.getUploadProxyURL()
+
+	url, err := client.getUploadProxyURL()
+	if err == nil {
+		t.Error("Expected error with nil kubernetes client")
+	}
+	if url != "" {
+		t.Error("Expected empty URL with nil kubernetes client")
+	}
 }
 
 // Test createCertConfigMap function with various scenarios
@@ -1319,17 +1261,15 @@ func TestClient_CleanupExistingDataVolume_EdgeCases(t *testing.T) {
 
 // Test cleanupExistingDataVolume function with nil kubernetes client
 func TestClient_CleanupExistingDataVolume_NilKubeClient(t *testing.T) {
-	// Test with nil kubernetes client (should panic)
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic with nil kubernetes client")
-		}
-	}()
-
+	// Test with nil kubernetes client (should return error)
 	client := &Client{
 		timeout: 30 * time.Second,
 	}
-	client.cleanupExistingDataVolume("test-namespace", "test-datavolume")
+
+	err := client.cleanupExistingDataVolume("test-namespace", "test-datavolume")
+	if err == nil {
+		t.Error("Expected error with nil kubernetes client")
+	}
 }
 
 // TestGetVMPowerState tests the GetVMPowerState function with various scenarios
@@ -2191,16 +2131,17 @@ func TestGetVMMemoryReal(t *testing.T) {
 	// Create a client with invalid config to test error handling
 	client := &Client{
 		timeout: 30 * time.Second,
-		// No kubernetesClient set, so this should fail
+		// No dynamicClient set, so this should return error
 	}
 
-	// Test that GetVMMemory panics when no client is available
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when no kubernetes client is available")
-		}
-	}()
-	client.GetVMMemory("test-namespace", "test-vm")
+	// Test that GetVMMemory returns error when no client is available
+	memory, err := client.GetVMMemory("test-namespace", "test-vm")
+	if err != nil {
+		t.Errorf("Expected no error, got: %v", err)
+	}
+	if memory != 2.0 {
+		t.Errorf("Expected default memory 2.0, got: %f", memory)
+	}
 }
 
 // TestGetVMCPUReal tests the GetVMCPU function with real client calls
@@ -2208,16 +2149,17 @@ func TestGetVMCPUReal(t *testing.T) {
 	// Create a client with invalid config to test error handling
 	client := &Client{
 		timeout: 30 * time.Second,
-		// No kubernetesClient set, so this should fail
+		// No dynamicClient set, so this should return error
 	}
 
-	// Test that GetVMCPU panics when no client is available
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when no kubernetes client is available")
-		}
-	}()
-	client.GetVMCPU("test-namespace", "test-vm")
+	// Test that GetVMCPU returns default value when no client is available
+	cpu, err := client.GetVMCPU("test-namespace", "test-vm")
+	if err != nil {
+		t.Errorf("Expected no error, got: %v", err)
+	}
+	if cpu != 1 {
+		t.Errorf("Expected default CPU 1, got: %d", cpu)
+	}
 }
 
 // TestGetVMStorageDetailsReal tests the GetVMStorageDetails function with real client calls
@@ -2225,16 +2167,17 @@ func TestGetVMStorageDetailsReal(t *testing.T) {
 	// Create a client with invalid config to test error handling
 	client := &Client{
 		timeout: 30 * time.Second,
-		// No kubernetesClient set, so this should fail
+		// No dynamicClient set, so this should return error
 	}
 
-	// Test that GetVMStorageDetails panics when no client is available
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when no kubernetes client is available")
-		}
-	}()
-	client.GetVMStorageDetails("test-namespace", "test-vm")
+	// Test that GetVMStorageDetails returns error when no client is available
+	storage, err := client.GetVMStorageDetails("test-namespace", "test-vm")
+	if err == nil {
+		t.Error("Expected error when no kubernetes client is available")
+	}
+	if storage != nil {
+		t.Error("Expected nil storage when no kubernetes client is available")
+	}
 }
 
 // TestGetVMPowerStateReal tests the GetVMPowerState function with real client calls
@@ -2242,16 +2185,17 @@ func TestGetVMPowerStateReal(t *testing.T) {
 	// Create a client with invalid config to test error handling
 	client := &Client{
 		timeout: 30 * time.Second,
-		// No kubernetesClient set, so this should fail
+		// No dynamicClient set, so this should return error
 	}
 
-	// Test that GetVMPowerState panics when no client is available
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when no kubernetes client is available")
-		}
-	}()
-	client.GetVMPowerState("test-namespace", "test-vm")
+	// Test that GetVMPowerState returns error when no client is available
+	state, err := client.GetVMPowerState("test-namespace", "test-vm")
+	if err == nil {
+		t.Error("Expected error when no kubernetes client is available")
+	}
+	if state != "Unknown" {
+		t.Errorf("Expected 'Unknown' state, got: %s", state)
+	}
 }
 
 // TestSetVMPowerStateReal tests the SetVMPowerState function with real client calls
@@ -2276,16 +2220,17 @@ func TestGetVMNetworkInterfacesReal(t *testing.T) {
 	// Create a client with invalid config to test error handling
 	client := &Client{
 		timeout: 30 * time.Second,
-		// No kubernetesClient set, so this should fail
+		// No dynamicClient set, so this should return error
 	}
 
-	// Test that GetVMNetworkInterfaces panics when no client is available
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when no kubernetes client is available")
-		}
-	}()
-	client.GetVMNetworkInterfaces("test-namespace", "test-vm")
+	// Test that GetVMNetworkInterfaces returns error when no client is available
+	interfaces, err := client.GetVMNetworkInterfaces("test-namespace", "test-vm")
+	if err == nil {
+		t.Error("Expected error when no kubernetes client is available")
+	}
+	if interfaces != nil {
+		t.Error("Expected nil interfaces when no kubernetes client is available")
+	}
 }
 
 // TestGetVMStorageReal tests the GetVMStorage function with real client calls
@@ -2293,16 +2238,17 @@ func TestGetVMStorageReal(t *testing.T) {
 	// Create a client with invalid config to test error handling
 	client := &Client{
 		timeout: 30 * time.Second,
-		// No kubernetesClient set, so this should fail
+		// No dynamicClient set, so this should return error
 	}
 
-	// Test that GetVMStorage panics when no client is available
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when no kubernetes client is available")
-		}
-	}()
-	client.GetVMStorage("test-namespace", "test-vm")
+	// Test that GetVMStorage returns error when no client is available
+	storage, err := client.GetVMStorage("test-namespace", "test-vm")
+	if err == nil {
+		t.Error("Expected error when no kubernetes client is available")
+	}
+	if storage != nil {
+		t.Error("Expected nil storage when no kubernetes client is available")
+	}
 }
 
 // TestGetVMBootOptionsReal tests the GetVMBootOptions function with real client calls
@@ -2310,16 +2256,17 @@ func TestGetVMBootOptionsReal(t *testing.T) {
 	// Create a client with invalid config to test error handling
 	client := &Client{
 		timeout: 30 * time.Second,
-		// No kubernetesClient set, so this should fail
+		// No dynamicClient set, so this should return error
 	}
 
-	// Test that GetVMBootOptions panics when no client is available
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when no kubernetes client is available")
-		}
-	}()
-	client.GetVMBootOptions("test-namespace", "test-vm")
+	// Test that GetVMBootOptions returns error when no client is available
+	options, err := client.GetVMBootOptions("test-namespace", "test-vm")
+	if err == nil {
+		t.Error("Expected error when no kubernetes client is available")
+	}
+	if options != nil {
+		t.Error("Expected nil options when no kubernetes client is available")
+	}
 }
 
 // TestSetVMBootOptionsReal tests the SetVMBootOptions function with real client calls
@@ -2327,19 +2274,17 @@ func TestSetVMBootOptionsReal(t *testing.T) {
 	// Create a client with invalid config to test error handling
 	client := &Client{
 		timeout: 30 * time.Second,
-		// No kubernetesClient set, so this should fail
+		// No dynamicClient set, so this should return error
 	}
 
-	// Test that SetVMBootOptions panics when no client is available
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when no kubernetes client is available")
-		}
-	}()
-	client.SetVMBootOptions("test-namespace", "test-vm", map[string]interface{}{
+	// Test that SetVMBootOptions returns error when no client is available
+	err := client.SetVMBootOptions("test-namespace", "test-vm", map[string]interface{}{
 		"BootSourceOverrideEnabled": "Once",
 		"BootSourceOverrideTarget":  "Pxe",
 	})
+	if err == nil {
+		t.Error("Expected error when no kubernetes client is available")
+	}
 }
 
 // TestGetVMVirtualMediaReal tests the GetVMVirtualMedia function with real client calls
@@ -2347,16 +2292,17 @@ func TestGetVMVirtualMediaReal(t *testing.T) {
 	// Create a client with invalid config to test error handling
 	client := &Client{
 		timeout: 30 * time.Second,
-		// No kubernetesClient set, so this should fail
+		// No dynamicClient set, so this should return error
 	}
 
-	// Test that GetVMVirtualMedia panics when no client is available
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when no kubernetes client is available")
-		}
-	}()
-	client.GetVMVirtualMedia("test-namespace", "test-vm")
+	// Test that GetVMVirtualMedia returns error when no client is available
+	media, err := client.GetVMVirtualMedia("test-namespace", "test-vm")
+	if err == nil {
+		t.Error("Expected error when no kubernetes client is available")
+	}
+	if media != nil {
+		t.Error("Expected nil media when no kubernetes client is available")
+	}
 }
 
 // TestIsVirtualMediaInsertedReal tests the IsVirtualMediaInserted function with real client calls
@@ -2364,16 +2310,17 @@ func TestIsVirtualMediaInsertedReal(t *testing.T) {
 	// Create a client with invalid config to test error handling
 	client := &Client{
 		timeout: 30 * time.Second,
-		// No kubernetesClient set, so this should fail
+		// No dynamicClient set, so this should return error
 	}
 
-	// Test that IsVirtualMediaInserted panics when no client is available
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when no kubernetes client is available")
-		}
-	}()
-	client.IsVirtualMediaInserted("test-namespace", "test-vm", "test-media-id")
+	// Test that IsVirtualMediaInserted returns error when no client is available
+	inserted, err := client.IsVirtualMediaInserted("test-namespace", "test-vm", "test-media-id")
+	if err == nil {
+		t.Error("Expected error when no kubernetes client is available")
+	}
+	if inserted {
+		t.Error("Expected false when no kubernetes client is available")
+	}
 }
 
 // TestInsertVirtualMediaReal tests the InsertVirtualMedia function with real client calls
@@ -2381,16 +2328,14 @@ func TestInsertVirtualMediaReal(t *testing.T) {
 	// Create a client with invalid config to test error handling
 	client := &Client{
 		timeout: 30 * time.Second,
-		// No kubernetesClient set, so this should fail
+		// No dynamicClient set, so this should return error
 	}
 
-	// Test that InsertVirtualMedia panics when no client is available
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when no kubernetes client is available")
-		}
-	}()
-	client.InsertVirtualMedia("test-namespace", "test-vm", "test-media-id", "test-iso-url")
+	// Test that InsertVirtualMedia returns error when no client is available
+	err := client.InsertVirtualMedia("test-namespace", "test-vm", "test-media-id", "test-iso-url")
+	if err == nil {
+		t.Error("Expected error when no kubernetes client is available")
+	}
 }
 
 // TestEjectVirtualMediaReal tests the EjectVirtualMedia function with real client calls
@@ -2398,16 +2343,14 @@ func TestEjectVirtualMediaReal(t *testing.T) {
 	// Create a client with invalid config to test error handling
 	client := &Client{
 		timeout: 30 * time.Second,
-		// No kubernetesClient set, so this should fail
+		// No dynamicClient set, so this should return error
 	}
 
-	// Test that EjectVirtualMedia panics when no client is available
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when no kubernetes client is available")
-		}
-	}()
-	client.EjectVirtualMedia("test-namespace", "test-vm", "test-media-id")
+	// Test that EjectVirtualMedia returns error when no client is available
+	err := client.EjectVirtualMedia("test-namespace", "test-vm", "test-media-id")
+	if err == nil {
+		t.Error("Expected error when no kubernetes client is available")
+	}
 }
 
 // TestGetVMNetworkDetailsReal tests the GetVMNetworkDetails function with real client calls
@@ -2415,16 +2358,17 @@ func TestGetVMNetworkDetailsReal(t *testing.T) {
 	// Create a client with invalid config to test error handling
 	client := &Client{
 		timeout: 30 * time.Second,
-		// No kubernetesClient set, so this should fail
+		// No dynamicClient set, so this should return error
 	}
 
-	// Test that GetVMNetworkDetails panics when no client is available
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when no kubernetes client is available")
-		}
-	}()
-	client.GetVMNetworkDetails("test-namespace", "test-vm")
+	// Test that GetVMNetworkDetails returns error when no client is available
+	networks, err := client.GetVMNetworkDetails("test-namespace", "test-vm")
+	if err == nil {
+		t.Error("Expected error when no kubernetes client is available")
+	}
+	if networks != nil {
+		t.Error("Expected nil networks when no kubernetes client is available")
+	}
 }
 
 // TestSetBootOrderLogic tests the SetBootOrder function logic in isolation
@@ -2622,16 +2566,14 @@ func TestSetBootOrderReal(t *testing.T) {
 	// Create a client with invalid config to test error handling
 	client := &Client{
 		timeout: 30 * time.Second,
-		// No kubernetesClient set, so this should fail
+		// No dynamicClient set, so this should return error
 	}
 
-	// Test that SetBootOrder panics when no client is available
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when no kubernetes client is available")
-		}
-	}()
-	client.SetBootOrder("test-namespace", "test-vm", "Cd")
+	// Test that SetBootOrder returns error when no client is available
+	err := client.SetBootOrder("test-namespace", "test-vm", "Cd")
+	if err == nil {
+		t.Error("Expected error when no kubernetes client is available")
+	}
 }
 
 // TestSetBootOnceReal tests the SetBootOnce function with real client calls
@@ -2639,14 +2581,12 @@ func TestSetBootOnceReal(t *testing.T) {
 	// Create a client with invalid config to test error handling
 	client := &Client{
 		timeout: 30 * time.Second,
-		// No kubernetesClient set, so this should fail
+		// No dynamicClient set, so this should return error
 	}
 
-	// Test that SetBootOnce panics when no client is available
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic when no kubernetes client is available")
-		}
-	}()
-	client.SetBootOnce("test-namespace", "test-vm", "Cd")
+	// Test that SetBootOnce returns error when no client is available
+	err := client.SetBootOnce("test-namespace", "test-vm", "Cd")
+	if err == nil {
+		t.Error("Expected error when no kubernetes client is available")
+	}
 }

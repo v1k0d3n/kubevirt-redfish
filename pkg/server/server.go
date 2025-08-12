@@ -770,6 +770,10 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 	var chassisConfig *config.ChassisConfig
 
 	user := auth.GetUser(r)
+	if user == nil {
+		s.sendForbidden(w, "Authentication required")
+		return
+	}
 
 	for _, chassis := range user.Chassis {
 		config, err := s.config.GetChassisByName(chassis)
@@ -960,6 +964,10 @@ func (s *Server) handleVirtualMediaCollection(w http.ResponseWriter, r *http.Req
 	var chassisConfig *config.ChassisConfig
 
 	user := auth.GetUser(r)
+	if user == nil {
+		s.sendForbidden(w, "Authentication required")
+		return
+	}
 
 	for _, chassis := range user.Chassis {
 		config, err := s.config.GetChassisByName(chassis)
@@ -1057,6 +1065,10 @@ func (s *Server) handleGetVirtualMedia(w http.ResponseWriter, r *http.Request, s
 	var chassisConfig *config.ChassisConfig
 
 	user := auth.GetUser(r)
+	if user == nil {
+		s.sendForbidden(w, "Authentication required")
+		return
+	}
 
 	for _, chassis := range user.Chassis {
 		config, err := s.config.GetChassisByName(chassis)
@@ -1318,6 +1330,10 @@ func (s *Server) handleBootUpdate(w http.ResponseWriter, r *http.Request, system
 	var chassisConfig *config.ChassisConfig
 
 	user := auth.GetUser(r)
+	if user == nil {
+		s.sendForbidden(w, "Authentication required")
+		return
+	}
 
 	for _, chassis := range user.Chassis {
 		config, err := s.config.GetChassisByName(chassis)
@@ -1647,6 +1663,10 @@ func (s *Server) handlePowerAction(w http.ResponseWriter, r *http.Request, syste
 	var chassisConfig *config.ChassisConfig
 
 	user := auth.GetUser(r)
+	if user == nil {
+		s.sendForbidden(w, "Authentication required")
+		return
+	}
 
 	for _, chassis := range user.Chassis {
 		config, err := s.config.GetChassisByName(chassis)
