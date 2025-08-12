@@ -381,7 +381,9 @@ func (hc *HealthChecker) HealthCheckMiddleware(next http.Handler) http.Handler {
 
 			// Send error response
 			jsonResponse, _ := hc.marshalJSON(errorResponse)
-			w.Write(jsonResponse)
+			if _, err := w.Write(jsonResponse); err != nil {
+				logger.Error("Failed to write health check error response: %v", err)
+			}
 
 			logger.Warning("Request blocked due to unhealthy service status")
 			return
@@ -427,7 +429,9 @@ func (hc *HealthChecker) handleHealthCheck(w http.ResponseWriter, r *http.Reques
 
 	// Send response
 	jsonResponse, _ := hc.marshalJSON(response)
-	w.Write(jsonResponse)
+	if _, err := w.Write(jsonResponse); err != nil {
+		logger.Error("Failed to write health check response: %v", err)
+	}
 }
 
 // marshalJSON marshals data to JSON (simplified for this example)

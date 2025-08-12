@@ -367,7 +367,9 @@ func (h *SecurityHandlers) handleSecurityEvents(w http.ResponseWriter, r *http.R
 		w.Header().Set("Content-Disposition", "attachment; filename=\"security-events.csv\"")
 
 		// Write CSV header
-		w.Write([]byte("Timestamp,EventType,Username,IPAddress,UserAgent,Path,Method,Status,CorrelationID,Details\n"))
+		if _, err := w.Write([]byte("Timestamp,EventType,Username,IPAddress,UserAgent,Path,Method,Status,CorrelationID,Details\n")); err != nil {
+			logger.Error("Failed to write CSV header: %v", err)
+		}
 
 		// Write CSV data
 		for _, event := range events {
@@ -390,7 +392,9 @@ func (h *SecurityHandlers) handleSecurityEvents(w http.ResponseWriter, r *http.R
 				event.CorrelationID,
 				details,
 			)
-			w.Write([]byte(line))
+			if _, err := w.Write([]byte(line)); err != nil {
+				logger.Error("Failed to write CSV line: %v", err)
+			}
 		}
 
 	default:

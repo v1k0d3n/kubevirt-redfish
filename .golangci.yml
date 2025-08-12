@@ -11,7 +11,7 @@ linters:
     - gosec      # Security issues - important to catch
     - goimports
     # Temporarily disabled - too noisy for current codebase
-    # - errcheck     # Unchecked errors - many false positives 
+    - errcheck     # Unchecked errors - RE-ENABLED: All production code issues resolved
     # - staticcheck  # Static analysis - many style issues
     # - gosimple     # Simplification suggestions
     # - ineffassign  # Ineffectual assignments
@@ -89,6 +89,7 @@ issues:
         - gocyclo
         - dupl
         - gocritic
+        - errcheck  # Exclude errcheck from test files (intentional panic testing)
     - path: pkg/redfish/types\.go
       linters:
         - gocritic

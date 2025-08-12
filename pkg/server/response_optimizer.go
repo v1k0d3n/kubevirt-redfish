@@ -228,7 +228,9 @@ func (ro *ResponseOptimizer) compressDeflate(data []byte) ([]byte, error) {
 // writeUncompressedResponse writes an uncompressed response
 func (ro *ResponseOptimizer) writeUncompressedResponse(w http.ResponseWriter, data []byte) {
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
-	w.Write(data)
+	if _, err := w.Write(data); err != nil {
+		logger.Error("Failed to write uncompressed response: %v", err)
+	}
 }
 
 // writeCompressedResponse writes a compressed response
@@ -243,7 +245,9 @@ func (ro *ResponseOptimizer) writeCompressedResponse(w http.ResponseWriter, data
 	}
 
 	w.Header().Set("Vary", "Accept-Encoding")
-	w.Write(data)
+	if _, err := w.Write(data); err != nil {
+		logger.Error("Failed to write compressed response: %v", err)
+	}
 }
 
 // updateStats updates optimizer statistics

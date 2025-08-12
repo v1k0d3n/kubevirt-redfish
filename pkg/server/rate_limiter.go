@@ -461,7 +461,9 @@ func (rl *RateLimiter) RateLimitMiddleware(next http.Handler) http.Handler {
 
 			// Send error response
 			jsonResponse, _ := rl.marshalJSON(errorResponse)
-			w.Write(jsonResponse)
+			if _, err := w.Write(jsonResponse); err != nil {
+				logger.Error("Failed to write rate limit error response: %v", err)
+			}
 
 			logger.Warning("Rate limit exceeded for request: %s %s", r.Method, r.URL.Path)
 			return

@@ -1878,7 +1878,9 @@ func (s *Server) sendOptimizedJSON(w http.ResponseWriter, r *http.Request, data 
 			return
 		}
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(jsonData)))
-		w.Write(jsonData)
+		if _, err := w.Write(jsonData); err != nil {
+			logger.Error("Failed to write JSON response: %v", err)
+		}
 		return
 	}
 
@@ -1896,12 +1898,16 @@ func (s *Server) sendOptimizedJSON(w http.ResponseWriter, r *http.Request, data 
 			logger.Error("Failed to optimize response: %v", err)
 			// Fallback to uncompressed response
 			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(jsonData)))
-			w.Write(jsonData)
+			if _, err := w.Write(jsonData); err != nil {
+				logger.Error("Failed to write fallback JSON response: %v", err)
+			}
 		}
 	} else {
 		// Fallback to uncompressed response
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(jsonData)))
-		w.Write(jsonData)
+		if _, err := w.Write(jsonData); err != nil {
+			logger.Error("Failed to write uncompressed JSON response: %v", err)
+		}
 	}
 }
 
@@ -2095,7 +2101,9 @@ func (s *Server) sendJSONResponse(w http.ResponseWriter, statusCode int, data in
 		}
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(jsonData)))
 		w.WriteHeader(statusCode)
-		w.Write(jsonData)
+		if _, err := w.Write(jsonData); err != nil {
+			logger.Error("Failed to write JSON response: %v", err)
+		}
 		return
 	}
 
@@ -2109,7 +2117,9 @@ func (s *Server) sendJSONResponse(w http.ResponseWriter, statusCode int, data in
 
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(jsonData)))
 	w.WriteHeader(statusCode)
-	w.Write(jsonData)
+	if _, err := w.Write(jsonData); err != nil {
+		logger.Error("Failed to write optimized JSON response: %v", err)
+	}
 }
 
 // encodeJSONResponse safely encodes JSON data to the response writer
