@@ -186,12 +186,14 @@ authentication:
 # DATAVOLUME CONFIGURATION
 # =============================================================================
 
+# DataVolume configuration for virtual media operations
 datavolume:
   storage_size: "3Gi"
   allow_insecure_tls: true
   storage_class: "lvms-vg1"
   vm_update_timeout: "2m"
   iso_download_timeout: "30m"
+  helper_image: "alpine:latest"  # Change to private registry image if needed
 
 # =============================================================================
 # VOLUMES CONFIGURATION

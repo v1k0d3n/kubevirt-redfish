@@ -245,6 +245,7 @@ func TestValidateConfig(t *testing.T) {
 					StorageClass:       "",
 					VMUpdateTimeout:    "30s",
 					ISODownloadTimeout: "30m",
+					HelperImage:        "alpine:latest",
 				},
 			},
 			wantErr: false,
@@ -826,6 +827,7 @@ func TestEnvironmentVariableOverrides(t *testing.T) {
 		},
 		DataVolume: DataVolumeConfig{
 			StorageSize: "10Gi",
+			HelperImage: "alpine:latest",
 		},
 	}
 
@@ -1097,10 +1099,11 @@ func TestGetDataVolumeConfig(t *testing.T) {
 			StorageClass:       "fast-ssd",
 			VMUpdateTimeout:    "5m",
 			ISODownloadTimeout: "10m",
+			HelperImage:        "custom-alpine:latest",
 		},
 	}
 
-	storageSize, allowInsecureTLS, storageClass, vmUpdateTimeout, isoDownloadTimeout := config.GetDataVolumeConfig()
+	storageSize, allowInsecureTLS, storageClass, vmUpdateTimeout, isoDownloadTimeout, helperImage := config.GetDataVolumeConfig()
 
 	// Verify all returned values match the config
 	if storageSize != "10Gi" {
@@ -1118,6 +1121,9 @@ func TestGetDataVolumeConfig(t *testing.T) {
 	if isoDownloadTimeout != "10m" {
 		t.Errorf("Expected isoDownloadTimeout '10m', got '%s'", isoDownloadTimeout)
 	}
+	if helperImage != "custom-alpine:latest" {
+		t.Errorf("Expected helperImage 'custom-alpine:latest', got '%s'", helperImage)
+	}
 }
 
 // TestGetDataVolumeConfigWithEmptyValues tests GetDataVolumeConfig with empty/default values
@@ -1129,10 +1135,11 @@ func TestGetDataVolumeConfigWithEmptyValues(t *testing.T) {
 			StorageClass:       "",
 			VMUpdateTimeout:    "",
 			ISODownloadTimeout: "",
+			HelperImage:        "",
 		},
 	}
 
-	storageSize, allowInsecureTLS, storageClass, vmUpdateTimeout, isoDownloadTimeout := config.GetDataVolumeConfig()
+	storageSize, allowInsecureTLS, storageClass, vmUpdateTimeout, isoDownloadTimeout, helperImage := config.GetDataVolumeConfig()
 
 	// Verify all returned values match the config
 	if storageSize != "" {
@@ -1149,6 +1156,9 @@ func TestGetDataVolumeConfigWithEmptyValues(t *testing.T) {
 	}
 	if isoDownloadTimeout != "" {
 		t.Errorf("Expected empty isoDownloadTimeout, got '%s'", isoDownloadTimeout)
+	}
+	if helperImage != "" {
+		t.Errorf("Expected empty helperImage, got '%s'", helperImage)
 	}
 }
 

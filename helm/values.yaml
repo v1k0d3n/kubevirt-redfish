@@ -316,6 +316,10 @@ datavolume:
   
   # Timeout for ISO download operations
   iso_download_timeout: "30m"
+  
+  # Helper image for ISO copy operations
+  # Change this to use a private registry image if needed
+  helper_image: "alpine:latest"
 
 # =============================================================================
 # VOLUMES CONFIGURATION

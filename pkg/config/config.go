@@ -142,14 +142,15 @@ type CDIUploadProxyConfig struct {
 	Timeout     int      `mapstructure:"timeout"`
 }
 
-// DataVolumeConfig holds DataVolume-specific configuration parameters.
-// It includes storage settings, TLS certificate handling, and timeout settings for ISO imports.
+// DataVolumeConfig holds configuration for DataVolume operations including ISO imports.
+// It includes storage settings, TLS certificate handling, timeout settings, and helper image configuration for ISO imports.
 type DataVolumeConfig struct {
 	StorageSize        string `mapstructure:"storage_size"`
 	AllowInsecureTLS   bool   `mapstructure:"allow_insecure_tls"`
 	StorageClass       string `mapstructure:"storage_class"`
 	VMUpdateTimeout    string `mapstructure:"vm_update_timeout"`
 	ISODownloadTimeout string `mapstructure:"iso_download_timeout"`
+	HelperImage        string `mapstructure:"helper_image"`
 }
 
 // LoadConfig loads configuration from file and environment variables.
@@ -236,6 +237,7 @@ func setDefaults() {
 	viper.SetDefault("datavolume.allow_insecure_tls", false)
 	viper.SetDefault("datavolume.vm_update_timeout", "30s")
 	viper.SetDefault("datavolume.iso_download_timeout", "30m")
+	viper.SetDefault("datavolume.helper_image", "alpine:latest")
 }
 
 // validateConfig validates the configuration to ensure all required fields are present
@@ -416,6 +418,11 @@ func validateDataVolumeConfig(dv *DataVolumeConfig) error {
 		return errors.NewValidationError("Invalid storage size format", fmt.Sprintf("datavolume.storage_size must be in Kubernetes resource format (e.g., '10Gi'), got '%s'", dv.StorageSize))
 	}
 
+	// Validate helper image format
+	if dv.HelperImage == "" {
+		return errors.NewValidationError("DataVolume helper image is required", "datavolume.helper_image cannot be empty")
+	}
+
 	// Validate timeout formats
 	if dv.VMUpdateTimeout != "" {
 		if _, err := time.ParseDuration(dv.VMUpdateTimeout); err != nil {
@@ -565,8 +572,8 @@ func (c *Config) GetChassisForUser(username string) ([]*ChassisConfig, error) {
 
 // GetDataVolumeConfig returns the DataVolume configuration settings.
 // This provides a safe way to access DataVolume settings without reflection.
-func (c *Config) GetDataVolumeConfig() (storageSize string, allowInsecureTLS bool, storageClass string, vmUpdateTimeout string, isoDownloadTimeout string) {
-	return c.DataVolume.StorageSize, c.DataVolume.AllowInsecureTLS, c.DataVolume.StorageClass, c.DataVolume.VMUpdateTimeout, c.DataVolume.ISODownloadTimeout
+func (c *Config) GetDataVolumeConfig() (storageSize string, allowInsecureTLS bool, storageClass string, vmUpdateTimeout string, isoDownloadTimeout string, helperImage string) {
+	return c.DataVolume.StorageSize, c.DataVolume.AllowInsecureTLS, c.DataVolume.StorageClass, c.DataVolume.VMUpdateTimeout, c.DataVolume.ISODownloadTimeout, c.DataVolume.HelperImage
 }
 
 // GetKubeVirtConfig returns the KubeVirt configuration settings.
@@ -628,6 +635,17 @@ authentication:
 kubevirt:
   api_version: "v1"  # KubeVirt API version to use
   timeout: 30        # Timeout in seconds for KubeVirt operations
+
+# DataVolume Configuration
+# ------------------------
+# DataVolume settings for ISO imports and storage operations.
+datavolume:
+  storage_size: "10Gi"           # Default storage size for DataVolumes
+  allow_insecure_tls: false      # Allow insecure TLS for ISO downloads
+  storage_class: ""              # Storage class (empty = default)
+  vm_update_timeout: "30s"       # Timeout for VM updates
+  iso_download_timeout: "30m"    # Timeout for ISO downloads
+  helper_image: "alpine:latest"  # Container image for ISO copy operations
 `
 
 	return os.WriteFile(path, []byte(defaultConfig), 0600)
@@ -646,6 +664,7 @@ func logEnvironmentOverrides() {
 		"KUBEVIRT_REDFISH_DATAVOLUME_ALLOW_INSECURE_TLS",
 		"KUBEVIRT_REDFISH_DATAVOLUME_VM_UPDATE_TIMEOUT",
 		"KUBEVIRT_REDFISH_DATAVOLUME_ISO_DOWNLOAD_TIMEOUT",
+		"KUBEVIRT_REDFISH_DATAVOLUME_HELPER_IMAGE",
 	}
 
 	var overrides []string

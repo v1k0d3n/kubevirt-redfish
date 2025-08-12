@@ -54,4 +54,5 @@ data:
       storage_class: "{{ .Values.datavolume.storage_class }}"
       vm_update_timeout: "{{ .Values.datavolume.vm_update_timeout }}"
       iso_download_timeout: "{{ .Values.datavolume.iso_download_timeout }}"
+      helper_image: "{{ .Values.datavolume.helper_image }}"
 {{- end }} 
