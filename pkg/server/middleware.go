@@ -23,6 +23,7 @@ import (
 	"compress/gzip"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -50,7 +51,11 @@ func (rw *ResponseWriter) Write(b []byte) (int, error) {
 // generateCorrelationID generates a unique correlation ID for request tracking
 func generateCorrelationID() string {
 	bytes := make([]byte, 8)
-	rand.Read(bytes)
+	if _, err := rand.Read(bytes); err != nil {
+		logger.Error("Failed to generate correlation ID: %v", err)
+		// Fallback to timestamp-based ID if random generation fails
+		return fmt.Sprintf("%x", time.Now().UnixNano())
+	}
 	return hex.EncodeToString(bytes)
 }
 

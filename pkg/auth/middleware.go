@@ -274,7 +274,9 @@ func (m *Middleware) sendUnauthorizedResponse(w http.ResponseWriter, message str
 		}
 	}`, message)
 
-	w.Write([]byte(errorResponse))
+	if _, err := w.Write([]byte(errorResponse)); err != nil {
+		logger.Error("Failed to write unauthorized error response: %v", err)
+	}
 }
 
 // sendForbiddenResponse sends an HTTP 403 Forbidden response.
@@ -294,7 +296,9 @@ func (m *Middleware) sendForbiddenResponse(w http.ResponseWriter, message string
 		}
 	}`, message)
 
-	w.Write([]byte(errorResponse))
+	if _, err := w.Write([]byte(errorResponse)); err != nil {
+		logger.Error("Failed to write forbidden error response: %v", err)
+	}
 }
 
 // GetAuthContext extracts authentication context from the request.

@@ -238,7 +238,9 @@ func TestAuthenticateMiddleware(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("authenticated"))
+		if _, err := w.Write([]byte("authenticated")); err != nil {
+			t.Errorf("Failed to write response: %v", err)
+		}
 	})
 
 	tests := []struct {
@@ -1189,7 +1191,9 @@ func TestEnhancedMiddleware_Authenticate(t *testing.T) {
 	// Test the Authenticate middleware function
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("success"))
+		if _, err := w.Write([]byte("success")); err != nil {
+			t.Errorf("Failed to write response: %v", err)
+		}
 	})
 
 	authenticatedHandler := middleware.Authenticate(handler)

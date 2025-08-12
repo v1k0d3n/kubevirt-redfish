@@ -362,7 +362,9 @@ func (s *Server) writeCachedResponse(w http.ResponseWriter, entry *CacheEntry) {
 	w.Header().Set("X-Cache-Age", time.Since(entry.CreatedAt).String())
 
 	// Write response
-	w.Write(entry.Data)
+	if _, err := w.Write(entry.Data); err != nil {
+		logger.Error("Failed to write cached response: %v", err)
+	}
 
 	logger.Debug("Served cached response (age: %v, accesses: %d)",
 		time.Since(entry.CreatedAt), entry.AccessCount)

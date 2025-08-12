@@ -421,7 +421,9 @@ func TestCacheMiddleware(t *testing.T) {
 	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"message": "test response"}`))
+		if _, err := w.Write([]byte(`{"message": "test response"}`)); err != nil {
+			t.Errorf("Failed to write response: %v", err)
+		}
 	})
 
 	// Create middleware
@@ -472,7 +474,9 @@ func TestCacheMiddlewareWithConditionalRequest(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ETag", `"test-etag"`)
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"message": "test response"}`))
+		if _, err := w.Write([]byte(`{"message": "test response"}`)); err != nil {
+			t.Errorf("Failed to write response: %v", err)
+		}
 	})
 
 	middleware := server.CacheMiddleware(testHandler)
@@ -506,7 +510,9 @@ func TestCacheMiddlewareWithSkipCache(t *testing.T) {
 	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"message": "test response"}`))
+		if _, err := w.Write([]byte(`{"message": "test response"}`)); err != nil {
+			t.Errorf("Failed to write response: %v", err)
+		}
 	})
 
 	middleware := server.CacheMiddleware(testHandler)

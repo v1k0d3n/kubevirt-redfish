@@ -119,7 +119,9 @@ func TestLoggingMiddleware(t *testing.T) {
 	// Create a test handler that returns a simple response
 	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("test response"))
+		if _, err := w.Write([]byte("test response")); err != nil {
+			t.Errorf("Failed to write response: %v", err)
+		}
 	})
 
 	// Create middleware
@@ -161,7 +163,9 @@ func TestPerformanceMiddleware(t *testing.T) {
 	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(10 * time.Millisecond) // Simulate work
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("test response"))
+		if _, err := w.Write([]byte("test response")); err != nil {
+			t.Errorf("Failed to write response: %v", err)
+		}
 	})
 
 	// Create middleware
@@ -227,7 +231,9 @@ func TestCompressionMiddleware(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 				// Create a large response to make compression worthwhile
 				largeData := strings.Repeat("test data ", 1000)
-				w.Write([]byte(largeData))
+				if _, err := w.Write([]byte(largeData)); err != nil {
+					t.Errorf("Failed to write response: %v", err)
+				}
 			})
 
 			// Create middleware
@@ -339,7 +345,9 @@ func TestSecurityMiddleware(t *testing.T) {
 	// Create a test handler
 	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("secure response"))
+		if _, err := w.Write([]byte("secure response")); err != nil {
+			t.Errorf("Failed to write response: %v", err)
+		}
 	})
 
 	// Create middleware
@@ -391,7 +399,9 @@ func TestMiddlewareChain(t *testing.T) {
 	// Create a test handler
 	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("chained response"))
+		if _, err := w.Write([]byte("chained response")); err != nil {
+			t.Errorf("Failed to write response: %v", err)
+		}
 	})
 
 	// Chain multiple middlewares

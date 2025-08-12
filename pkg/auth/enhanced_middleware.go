@@ -541,7 +541,7 @@ func (m *EnhancedMiddleware) logSecurityEvent(event SecurityEvent) {
 }
 
 // sendRateLimitResponse sends an HTTP 429 Too Many Requests response.
-// It provides a standardized response for rate limit violations.
+// It provides a standardized error response for rate limiting.
 //
 // Parameters:
 // - w: HTTP response writer
@@ -565,7 +565,9 @@ func (m *EnhancedMiddleware) sendRateLimitResponse(w http.ResponseWriter, messag
 		}
 	}`, message)
 
-	w.Write([]byte(errorResponse))
+	if _, err := w.Write([]byte(errorResponse)); err != nil {
+		logger.Error("Failed to write rate limit error response: %v", err)
+	}
 }
 
 // sendUnauthorizedResponse sends an HTTP 401 Unauthorized response.
@@ -586,7 +588,9 @@ func (m *EnhancedMiddleware) sendUnauthorizedResponse(w http.ResponseWriter, mes
 		}
 	}`, message)
 
-	w.Write([]byte(errorResponse))
+	if _, err := w.Write([]byte(errorResponse)); err != nil {
+		logger.Error("Failed to write unauthorized error response: %v", err)
+	}
 }
 
 // sendForbiddenResponse sends an HTTP 403 Forbidden response.
@@ -606,7 +610,9 @@ func (m *EnhancedMiddleware) sendForbiddenResponse(w http.ResponseWriter, messag
 		}
 	}`, message)
 
-	w.Write([]byte(errorResponse))
+	if _, err := w.Write([]byte(errorResponse)); err != nil {
+		logger.Error("Failed to write forbidden error response: %v", err)
+	}
 }
 
 // extractChassisFromPath extracts the chassis name from the request path.

@@ -672,7 +672,9 @@ func TestOptimizedResponseWriter_Flush_ErrorResponse(t *testing.T) {
 
 	testData := []byte("error data")
 	orw.WriteHeader(http.StatusInternalServerError)
-	orw.Write(testData)
+	if _, err := orw.Write(testData); err != nil {
+		t.Errorf("Failed to write response: %v", err)
+	}
 
 	err := orw.Flush()
 	if err != nil {
@@ -702,7 +704,9 @@ func TestOptimizedResponseWriter_Flush_SuccessResponse(t *testing.T) {
 	orw := NewOptimizedResponseWriter(w, r, ro)
 
 	testData := []byte(strings.Repeat("test data ", 200)) // Large enough to trigger compression
-	orw.Write(testData)
+	if _, err := orw.Write(testData); err != nil {
+		t.Errorf("Failed to write response: %v", err)
+	}
 
 	err := orw.Flush()
 	if err != nil {
@@ -731,7 +735,9 @@ func TestOptimizedResponseWriter_GetCapturedData(t *testing.T) {
 	orw := NewOptimizedResponseWriter(w, r, ro)
 
 	testData := []byte("test data")
-	orw.Write(testData)
+	if _, err := orw.Write(testData); err != nil {
+		t.Errorf("Failed to write response: %v", err)
+	}
 
 	captured := orw.GetCapturedData()
 	if !bytes.Equal(captured, testData) {

@@ -655,7 +655,7 @@ func (s *Server) handleChassis(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("ETag", chassis.OdataEtag)
 	s.setCacheHeaders(w, "resource")
-	json.NewEncoder(w).Encode(chassis)
+	s.encodeJSONResponse(w, chassis)
 }
 
 // handleSystemsCollection handles the systems collection endpoint.
@@ -884,7 +884,7 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("ETag", system.OdataEtag)
 	s.setCacheHeaders(w, "resource")
-	json.NewEncoder(w).Encode(system)
+	s.encodeJSONResponse(w, system)
 }
 
 // handleVirtualMediaRequest handles virtual media requests within the system handler.
@@ -1111,7 +1111,7 @@ func (s *Server) handleGetVirtualMedia(w http.ResponseWriter, r *http.Request, s
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("ETag", virtualMedia.OdataEtag)
 	s.setCacheHeaders(w, "resource")
-	json.NewEncoder(w).Encode(virtualMedia)
+	s.encodeJSONResponse(w, virtualMedia)
 }
 
 // handleInsertVirtualMedia handles POST requests to insert virtual media.
@@ -1192,7 +1192,7 @@ func (s *Server) handleInsertVirtualMedia(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	s.setCacheHeaders(w, "action")
-	json.NewEncoder(w).Encode(redfishTask)
+	s.encodeJSONResponse(w, redfishTask)
 
 	// Invalidate related cache entries after virtual media insertion
 	s.responseCache.Invalidate(fmt.Sprintf("Systems/%s/VirtualMedia", systemName))
@@ -1260,7 +1260,7 @@ func (s *Server) handleEjectVirtualMedia(w http.ResponseWriter, r *http.Request,
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	s.setCacheHeaders(w, "action")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	s.encodeJSONResponse(w, map[string]interface{}{
 		"@odata.context": "/redfish/v1/$metadata#ActionResponse.ActionResponse",
 		"@odata.type":    "#ActionResponse.v1_0_0.ActionResponse",
 		"@odata.id":      fmt.Sprintf("/redfish/v1/Systems/%s/VirtualMedia/%s/Actions/VirtualMedia.EjectMedia", systemName, mediaID),
@@ -1610,7 +1610,7 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("ETag", redfishTask.OdataEtag)
 	s.setCacheHeaders(w, "task")
-	json.NewEncoder(w).Encode(redfishTask)
+	s.encodeJSONResponse(w, redfishTask)
 }
 
 // handlePowerAction handles power management actions for a computer system.
@@ -1697,7 +1697,7 @@ func (s *Server) handlePowerAction(w http.ResponseWriter, r *http.Request, syste
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	s.setCacheHeaders(w, "action")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	s.encodeJSONResponse(w, map[string]interface{}{
 		"@odata.context": "/redfish/v1/$metadata#ActionResponse.ActionResponse",
 		"@odata.type":    "#ActionResponse.v1_0_0.ActionResponse",
 		"@odata.id":      fmt.Sprintf("/redfish/v1/Systems/%s/Actions/ComputerSystem.Reset", systemName),
@@ -2110,4 +2110,12 @@ func (s *Server) sendJSONResponse(w http.ResponseWriter, statusCode int, data in
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(jsonData)))
 	w.WriteHeader(statusCode)
 	w.Write(jsonData)
+}
+
+// encodeJSONResponse safely encodes JSON data to the response writer
+func (s *Server) encodeJSONResponse(w http.ResponseWriter, data interface{}) {
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		logger.Error("Failed to encode JSON response: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
 }
