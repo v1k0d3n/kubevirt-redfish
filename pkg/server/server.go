@@ -1511,12 +1511,12 @@ func (s *Server) handleBootUpdate(w http.ResponseWriter, r *http.Request, system
 func (s *Server) handleManager(w http.ResponseWriter, r *http.Request) {
 	// Extract manager ID from path
 	pathParts := strings.Split(r.URL.Path, "/")
-	if len(pathParts) < 4 {
+	if len(pathParts) < 5 {
 		s.sendNotFound(w, "Invalid manager path")
 		return
 	}
 
-	managerID := pathParts[3]
+	managerID := pathParts[4]
 	if managerID == "" {
 		s.sendNotFound(w, "Manager ID required")
 		return
@@ -1598,6 +1598,12 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 
 	// Validate HTTP method
 	if !s.validateMethod(w, r, []string{"GET"}) {
+		return
+	}
+
+	// Check if task manager is initialized
+	if s.taskManager == nil {
+		s.sendNotFound(w, "Task manager not available")
 		return
 	}
 

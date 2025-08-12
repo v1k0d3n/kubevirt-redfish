@@ -1253,3 +1253,284 @@ func TestHandleSystemsCollection(t *testing.T) {
 		assert.Len(t, response.Members, 0)
 	})
 }
+
+// TestHandleServiceRoot tests the handleServiceRoot HTTP handler
+func TestHandleServiceRoot(t *testing.T) {
+	server := testServer(t)
+
+	// Test 1: Valid GET request to service root
+	t.Run("Valid GET request", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/redfish/v1/", nil)
+		w := httptest.NewRecorder()
+
+		server.handleServiceRoot(w, req)
+
+		// Verify response
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var response redfish.ServiceRoot
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "/redfish/v1/", response.OdataID)
+		assert.Equal(t, "RootService", response.ID)
+		assert.Equal(t, "Root Service", response.Name)
+		assert.Equal(t, "#ServiceRoot.v1_0_0.ServiceRoot", response.OdataType)
+		assert.Equal(t, "/redfish/v1/Systems", response.Systems.OdataID)
+		assert.Equal(t, "/redfish/v1/Chassis", response.Chassis.OdataID)
+		assert.Equal(t, "/redfish/v1/Managers", response.Managers.OdataID)
+	})
+
+	// Test 2: Invalid path
+	t.Run("Invalid path", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/redfish/v1/Invalid", nil)
+		w := httptest.NewRecorder()
+
+		server.handleServiceRoot(w, req)
+
+		// Debug: Let's see what the actual response is
+		t.Logf("Response status: %d", w.Code)
+		t.Logf("Response body: %s", w.Body.String())
+
+		// Verify response
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "Base.1.0.ResourceNotFound", response["error"].(map[string]interface{})["code"])
+		assert.Contains(t, response["error"].(map[string]interface{})["message"], "Resource not found")
+	})
+
+	// Test 3: Invalid HTTP method
+	t.Run("Invalid HTTP method", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/redfish/v1/", nil)
+		w := httptest.NewRecorder()
+
+		server.handleServiceRoot(w, req)
+
+		// Debug: Let's see what the actual response is
+		t.Logf("Response status: %d", w.Code)
+		t.Logf("Response body: %s", w.Body.String())
+
+		// Verify response
+		assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "Base.1.0.GeneralError", response["error"].(map[string]interface{})["code"])
+		assert.Contains(t, response["error"].(map[string]interface{})["message"], "Method POST not allowed")
+	})
+
+	// Test 4: Different valid path variations
+	t.Run("Path variations", func(t *testing.T) {
+		// Test with trailing slash
+		req := httptest.NewRequest("GET", "/redfish/v1/", nil)
+		w := httptest.NewRecorder()
+		server.handleServiceRoot(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		// Test without trailing slash (should fail)
+		req = httptest.NewRequest("GET", "/redfish/v1", nil)
+		w = httptest.NewRecorder()
+		server.handleServiceRoot(w, req)
+		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
+}
+
+// TestHandleManager tests the handleManager HTTP handler
+func TestHandleManager(t *testing.T) {
+	server := testServer(t)
+
+	// Test 1: Valid GET request to manager
+	t.Run("Valid GET request", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/redfish/v1/Managers/manager1", nil)
+		req.Header.Set("Authorization", "Basic dGVzdHVzZXI6dGVzdHBhc3M=") // testuser:testpass
+
+		// Set up authentication context manually for testing
+		user := &auth.User{
+			Username: "testuser",
+			Password: "testpass",
+			Chassis:  []string{"chassis1"},
+		}
+		authCtx := &auth.AuthContext{
+			User:    user,
+			Chassis: "",
+		}
+		ctx := logger.WithAuth(req.Context(), authCtx)
+		req = req.WithContext(ctx)
+
+		w := httptest.NewRecorder()
+
+		server.handleManager(w, req)
+
+		// Debug: Let's see what the actual response is
+		t.Logf("Response status: %d", w.Code)
+		t.Logf("Response body: %s", w.Body.String())
+
+		// Verify response - expect success with empty manager for systems
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "manager1", response["Id"])
+		assert.Equal(t, "KubeVirt Manager", response["Name"])
+		assert.Equal(t, "#Manager.v1_0_0.Manager", response["@odata.type"])
+		assert.Equal(t, "Service", response["ManagerType"])
+		assert.Equal(t, "Enabled", response["Status"].(map[string]interface{})["State"])
+		assert.Equal(t, "OK", response["Status"].(map[string]interface{})["Health"])
+		// ManagerForSystems should be empty due to nil KubeVirt client
+		assert.Empty(t, response["Links"].(map[string]interface{})["ManagerForSystems"])
+	})
+
+	// Test 2: Invalid path (too short)
+	t.Run("Invalid path - too short", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/redfish/v1/Managers", nil)
+		w := httptest.NewRecorder()
+
+		server.handleManager(w, req)
+
+		// Verify response
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "Base.1.0.ResourceNotFound", response["error"].(map[string]interface{})["code"])
+		assert.Contains(t, response["error"].(map[string]interface{})["message"], "Resource not found")
+	})
+
+	// Test 3: Empty manager ID
+	t.Run("Empty manager ID", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/redfish/v1/Managers/", nil)
+		w := httptest.NewRecorder()
+
+		server.handleManager(w, req)
+
+		// Verify response
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "Base.1.0.ResourceNotFound", response["error"].(map[string]interface{})["code"])
+		assert.Contains(t, response["error"].(map[string]interface{})["message"], "Resource not found")
+	})
+
+	// Test 4: Invalid HTTP method
+	t.Run("Invalid HTTP method", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/redfish/v1/Managers/manager1", nil)
+		w := httptest.NewRecorder()
+
+		server.handleManager(w, req)
+
+		// Verify response
+		assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "Base.1.0.GeneralError", response["error"].(map[string]interface{})["code"])
+		assert.Contains(t, response["error"].(map[string]interface{})["message"], "Method POST not allowed")
+	})
+}
+
+// TestHandleTask tests the handleTask HTTP handler
+func TestHandleTask(t *testing.T) {
+	server := testServer(t)
+
+	// Test 1: Valid GET request to existing task
+	t.Run("Valid GET request - existing task", func(t *testing.T) {
+		// Don't initialize task manager - it will be nil and the handler should handle this gracefully
+		// server.taskManager = NewTaskManager(1, server.kubevirtClient)
+
+		// Test with a non-existent task ID
+		taskID := "non-existent-task"
+		req := httptest.NewRequest("GET", "/redfish/v1/Tasks/"+taskID, nil)
+		w := httptest.NewRecorder()
+
+		server.handleTask(w, req)
+
+		// Debug: Let's see what the actual response is
+		t.Logf("Response status: %d", w.Code)
+		t.Logf("Response body: %s", w.Body.String())
+
+		// Verify response - should return 404 for non-existent task
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "Base.1.0.ResourceNotFound", response["error"].(map[string]interface{})["code"])
+		assert.Contains(t, response["error"].(map[string]interface{})["message"], "Resource not found")
+	})
+
+	// Test 2: Task not found
+	t.Run("Task not found", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/redfish/v1/Tasks/nonexistent-task", nil)
+		w := httptest.NewRecorder()
+
+		server.handleTask(w, req)
+
+		// Verify response
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "Base.1.0.ResourceNotFound", response["error"].(map[string]interface{})["code"])
+		assert.Contains(t, response["error"].(map[string]interface{})["message"], "Resource not found")
+	})
+
+	// Test 3: Invalid path (too short)
+	t.Run("Invalid path - too short", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/redfish/v1/Tasks", nil)
+		w := httptest.NewRecorder()
+
+		server.handleTask(w, req)
+
+		// Verify response
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "Base.1.0.ResourceNotFound", response["error"].(map[string]interface{})["code"])
+		assert.Contains(t, response["error"].(map[string]interface{})["message"], "Resource not found")
+	})
+
+	// Test 4: Empty task ID
+	t.Run("Empty task ID", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/redfish/v1/Tasks/", nil)
+		w := httptest.NewRecorder()
+
+		server.handleTask(w, req)
+
+		// Verify response
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "Base.1.0.ResourceNotFound", response["error"].(map[string]interface{})["code"])
+		assert.Contains(t, response["error"].(map[string]interface{})["message"], "Resource not found")
+	})
+
+	// Test 5: Invalid HTTP method
+	t.Run("Invalid HTTP method", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/redfish/v1/Tasks/test-task", nil)
+		w := httptest.NewRecorder()
+
+		server.handleTask(w, req)
+
+		// Verify response
+		assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, "Base.1.0.GeneralError", response["error"].(map[string]interface{})["code"])
+		assert.Contains(t, response["error"].(map[string]interface{})["message"], "Method POST not allowed")
+	})
+}
