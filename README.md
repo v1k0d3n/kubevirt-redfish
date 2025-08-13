@@ -174,19 +174,19 @@ Once deployed, the Redfish API will be available at the service (k8s) or route (
 **Example** - Query the root URL without authentication (this is defined as per the Redfish specification)
 
 ```
-curl -k https://kubevirt-redfish-{nanespace}.apps.{cluster_name}.{domain_name}/redfish/v1/
+curl -k https://kubevirt-redfish-{namespace}.apps.{cluster_name}.{domain_name}/redfish/v1/
 ```
 
 **Example** - Return a list of managed systems (VMs)
 
 ```
-curl -k -u user:pass https://kubevirt-redfish-{nanespace}.apps.{cluster_name}.{domain_name}/redfish/v1/Systems
+curl -k -u user:pass https://kubevirt-redfish-{namespace}.apps.{cluster_name}.{domain_name}/redfish/v1/Systems
 ```
 
 **Example** - Powering on a VM
 
 ```
-curl -kX POST -u user:pass https://kubevirt-redfish-{manespace}.apps.{cluster_name}.{domain_name}/redfish/v1/Systems/{vm-id}/Actions/ComputerSystem.Reset \
+curl -kX POST -u user:pass https://kubevirt-redfish-{namespace}.apps.{cluster_name}.{domain_name}/redfish/v1/Systems/{vm-id}/Actions/ComputerSystem.Reset \
   -H "Content-Type: application/json" \
   -d '{"ResetType": "On"}'
 ```
