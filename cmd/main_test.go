@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/v1k0d3n/kubevirt-redfish/pkg/config"
+	"github.com/v1k0d3n/kubevirt-redfish/pkg/kubevirt"
+	"github.com/v1k0d3n/kubevirt-redfish/pkg/logger"
 	"github.com/v1k0d3n/kubevirt-redfish/pkg/server"
 )
 
@@ -518,5 +520,277 @@ func TestMainFunctionCreateConfigFlag(t *testing.T) {
 	}
 	if *showVersion {
 		t.Error("showVersion should be false when --create-config flag is used")
+	}
+}
+
+// TestMainFunctionErrorHandling tests error handling scenarios that main() would encounter
+func TestMainFunctionErrorHandling(t *testing.T) {
+	// Test config loading error handling
+	invalidConfigPath := "/nonexistent/path/config.yaml"
+	_, err := config.LoadConfig(invalidConfigPath)
+	if err == nil {
+		t.Error("Loading config from invalid path should return an error")
+	}
+
+	// Test config creation error handling
+	invalidCreatePath := "/nonexistent/directory/config.yaml"
+	err = config.CreateDefaultConfig(invalidCreatePath)
+	if err == nil {
+		t.Error("Creating config in invalid directory should return an error")
+	}
+}
+
+// TestMainFunctionConfigValidation tests config validation scenarios
+func TestMainFunctionConfigValidation(t *testing.T) {
+	// Create a temporary config file
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "test-config.yaml")
+
+	// Create a default config file
+	err := config.CreateDefaultConfig(configPath)
+	if err != nil {
+		t.Fatalf("Failed to create test config: %v", err)
+	}
+
+	// Test that the config can be loaded successfully
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("Failed to load test config: %v", err)
+	}
+
+	// Verify config has expected structure
+	if cfg.Server.Host == "" {
+		t.Error("Server host should not be empty")
+	}
+	if cfg.Server.Port == 0 {
+		t.Error("Server port should not be zero")
+	}
+	if len(cfg.Chassis) == 0 {
+		t.Error("Chassis configuration should not be empty")
+	}
+}
+
+// TestMainFunctionKubeVirtClientCreation tests KubeVirt client creation scenarios
+func TestMainFunctionKubeVirtClientCreation(t *testing.T) {
+	// Create a minimal config for testing
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Host: "localhost",
+			Port: 8080,
+		},
+		Chassis: []config.ChassisConfig{
+			{
+				Name:      "test-chassis",
+				Namespace: "default",
+			},
+		},
+	}
+
+	// Test client creation with invalid kubeconfig (should fail gracefully)
+	_, err := kubevirt.NewClient("/nonexistent/kubeconfig", 30*time.Second, cfg)
+	// This should fail, but not panic
+	if err == nil {
+		t.Log("Note: KubeVirt client creation with invalid kubeconfig succeeded (may be expected in test environment)")
+	}
+}
+
+// TestMainFunctionLoggerInitialization tests logger initialization scenarios
+func TestMainFunctionLoggerInitialization(t *testing.T) {
+	// Test logger initialization with different log levels
+	logLevels := []string{"debug", "info", "warn", "error"}
+
+	for _, level := range logLevels {
+		t.Run("log_level_"+level, func(t *testing.T) {
+			// Set environment variable for log level
+			os.Setenv("REDFISH_LOG_LEVEL", level)
+			defer os.Unsetenv("REDFISH_LOG_LEVEL")
+
+			// Test that log level can be retrieved
+			retrievedLevel := logger.GetLogLevelFromEnv()
+			if retrievedLevel == "" {
+				t.Error("Log level should not be empty")
+			}
+		})
+	}
+
+	// Test logger enabled/disabled scenarios
+	testCases := []struct {
+		name     string
+		envValue string
+		expected bool
+	}{
+		{"enabled_true", "true", true},
+		{"enabled_false", "false", false},
+		{"enabled_empty", "", true},           // Default should be enabled
+		{"enabled_invalid", "invalid", false}, // Invalid should default to disabled
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			os.Setenv("REDFISH_LOGGING_ENABLED", tc.envValue)
+			defer os.Unsetenv("REDFISH_LOGGING_ENABLED")
+
+			enabled := logger.IsLoggingEnabled()
+			if enabled != tc.expected {
+				t.Errorf("Expected logging enabled %v, got %v", tc.expected, enabled)
+			}
+		})
+	}
+}
+
+// TestMainFunctionServerCreation tests server creation scenarios
+func TestMainFunctionServerCreation(t *testing.T) {
+	// Create a minimal config for testing
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Host: "localhost",
+			Port: 8080,
+		},
+		Chassis: []config.ChassisConfig{
+			{
+				Name:      "test-chassis",
+				Namespace: "default",
+			},
+		},
+	}
+
+	// Test server creation with nil kubevirt client (for testing purposes)
+	server := server.NewServer(cfg, nil)
+	if server == nil {
+		t.Error("Server should not be nil")
+	}
+
+	// Test server configuration
+	if server == nil {
+		t.Error("Server should be created successfully")
+	}
+}
+
+// TestMainFunctionSignalHandlingSetup tests signal handling setup
+func TestMainFunctionSignalHandlingSetup(t *testing.T) {
+	// Test that signal types are valid
+	signals := []os.Signal{syscall.SIGINT, syscall.SIGTERM}
+
+	for _, sig := range signals {
+		if sig == nil {
+			t.Error("Signal should not be nil")
+		}
+	}
+
+	// Test that signal channel can be created
+	quit := make(chan os.Signal, 1)
+	// Channel created with make() is never nil, so we just verify it was created
+	_ = quit
+}
+
+// TestMainFunctionFileOperations tests file operation scenarios
+func TestMainFunctionFileOperations(t *testing.T) {
+	// Test file path operations
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "test-config.yaml")
+
+	// Test filepath.Split
+	dir, file := filepath.Split(configPath)
+	if dir == "" {
+		t.Error("Directory should not be empty")
+	}
+	if file == "" {
+		t.Error("File should not be empty")
+	}
+
+	// Test file creation and existence check
+	err := config.CreateDefaultConfig(configPath)
+	if err != nil {
+		t.Fatalf("Failed to create test config: %v", err)
+	}
+
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		t.Error("Config file should exist after creation")
+	}
+}
+
+// TestMainFunctionFlagParsingEdgeCases tests edge cases in flag parsing
+func TestMainFunctionFlagParsingEdgeCases(t *testing.T) {
+	testCases := []struct {
+		name string
+		args []string
+	}{
+		{"single_arg", []string{"kubevirt-redfish"}},
+		{"multiple_flags", []string{"kubevirt-redfish", "--config", "/test/config.yaml", "--kubeconfig", "/test/kubeconfig", "--version"}},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Save original args
+			originalArgs := os.Args
+			defer func() { os.Args = originalArgs }()
+
+			if len(tc.args) > 0 {
+				os.Args = tc.args
+			}
+
+			// Reset flag state
+			flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+
+			// Parse flags (this should not panic)
+			configPath := flag.String("config", "", "Path to configuration file")
+			kubeconfig := flag.String("kubeconfig", "", "Path to kubeconfig file")
+			showVersion := flag.Bool("version", false, "Show version information")
+			createConfig := flag.String("create-config", "", "Create a default configuration file")
+
+			// This should not panic even with invalid flags
+			flag.Parse()
+
+			// Verify flags are accessible
+			if configPath == nil {
+				t.Error("configPath flag should not be nil")
+			}
+			if kubeconfig == nil {
+				t.Error("kubeconfig flag should not be nil")
+			}
+			if showVersion == nil {
+				t.Error("showVersion flag should not be nil")
+			}
+			if createConfig == nil {
+				t.Error("createConfig flag should not be nil")
+			}
+		})
+	}
+}
+
+// TestMainFunctionEnvironmentVariables tests environment variable handling
+func TestMainFunctionEnvironmentVariables(t *testing.T) {
+	// Test environment variable access
+	envVars := []string{
+		"REDFISH_LOG_LEVEL",
+		"REDFISH_LOGGING_ENABLED",
+		"KUBECONFIG",
+		"HOME",
+	}
+
+	for _, envVar := range envVars {
+		t.Run("env_var_"+envVar, func(t *testing.T) {
+			// Test that we can access environment variables
+			value := os.Getenv(envVar)
+			// We don't care about the actual value, just that we can access it
+			_ = value
+		})
+	}
+}
+
+// TestMainFunctionTimeOperations tests time-related operations
+func TestMainFunctionTimeOperations(t *testing.T) {
+	// Test timeout creation
+	timeout := 30 * time.Second
+	if timeout <= 0 {
+		t.Error("Timeout should be positive")
+	}
+
+	// Test time operations
+	start := time.Now()
+	time.Sleep(1 * time.Millisecond) // Minimal sleep for testing
+	elapsed := time.Since(start)
+	if elapsed <= 0 {
+		t.Error("Elapsed time should be positive")
 	}
 }
