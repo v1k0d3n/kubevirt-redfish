@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -423,4 +424,65 @@ func IsLoggingEnabled() bool {
 		return true
 	}
 	return strings.ToLower(enabled) == "true"
+}
+
+// sanitizeHeaders removes sensitive headers from HTTP headers for secure logging.
+// It preserves useful debugging information while removing credentials and sensitive data.
+//
+// Parameters:
+// - headers: HTTP headers to sanitize
+//
+// Returns:
+// - map[string]string: Sanitized headers safe for logging
+func sanitizeHeaders(headers http.Header) map[string]string {
+	sanitized := make(map[string]string)
+
+	// List of headers that are safe to log (useful for debugging)
+	safeHeaders := []string{
+		"User-Agent",
+		"Accept",
+		"Content-Type",
+		"X-Forwarded-For",
+		"X-Real-IP",
+		"X-Client-IP",
+		"Content-Length",
+		"Accept-Encoding",
+		"Cache-Control",
+		"X-Redfish-User", // Our custom header
+		"Host",
+		"Connection",
+		"Upgrade",
+		"Sec-WebSocket-Key",
+		"Sec-WebSocket-Version",
+		"Origin",
+		"Referer",
+	}
+
+	// Add safe headers to sanitized map
+	for _, name := range safeHeaders {
+		if value := headers.Get(name); value != "" {
+			sanitized[name] = value
+		}
+	}
+
+	return sanitized
+}
+
+// LogSafeHeaders logs HTTP headers with sensitive data removed.
+// This function provides debugging information while maintaining security.
+//
+// Parameters:
+// - message: Log message
+// - headers: HTTP headers to log
+// - correlationID: Request correlation ID for tracing
+func LogSafeHeaders(message string, headers http.Header, correlationID string) {
+	sanitized := sanitizeHeaders(headers)
+
+	fields := map[string]interface{}{
+		"correlation_id": correlationID,
+		"headers":        sanitized,
+		"header_count":   len(sanitized),
+	}
+
+	DebugStructured(message, fields)
 }

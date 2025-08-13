@@ -739,7 +739,7 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 
 	// Log all incoming system requests for monitoring
 	logger.Info("Received %s request for VM %s from %s", r.Method, systemName, r.RemoteAddr)
-	logger.Debug("Request path: %s, Headers: %v", r.URL.Path, r.Header)
+	logger.LogSafeHeaders("System request headers", r.Header, logger.GetCorrelationID(r.Context()))
 
 	// Handle power management actions
 	if r.Method == "POST" && strings.Contains(r.URL.Path, "/Actions/ComputerSystem.Reset") {
@@ -1311,7 +1311,7 @@ func (s *Server) handleEjectVirtualMedia(w http.ResponseWriter, r *http.Request,
 func (s *Server) handleBootUpdate(w http.ResponseWriter, r *http.Request, systemName string) {
 	// Log incoming boot update request for monitoring
 	logger.Info("Received PATCH boot update request for VM %s from %s", systemName, r.RemoteAddr)
-	logger.Debug("Boot update request headers: %v", r.Header)
+	logger.LogSafeHeaders("Boot update request headers", r.Header, logger.GetCorrelationID(r.Context()))
 
 	// Parse the request body
 	var bootUpdate map[string]interface{}

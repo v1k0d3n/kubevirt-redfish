@@ -3,6 +3,7 @@ package logger
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"os"
 	"reflect"
 	"strings"
@@ -416,25 +417,203 @@ func TestIsLoggingEnabled(t *testing.T) {
 	// Test with no environment variable set
 	result := IsLoggingEnabled()
 	if !result {
-		t.Error("Expected logging to be enabled by default")
-	}
-
-	// Test with environment variable set to false
-	os.Setenv("REDFISH_LOGGING_ENABLED", "false")
-	defer os.Unsetenv("REDFISH_LOGGING_ENABLED")
-
-	result = IsLoggingEnabled()
-	if result {
-		t.Error("Expected logging to be disabled when REDFISH_LOGGING_ENABLED=false")
+		t.Errorf("Expected default to be true, got %v", result)
 	}
 
 	// Test with environment variable set to true
 	os.Setenv("REDFISH_LOGGING_ENABLED", "true")
+	defer os.Unsetenv("REDFISH_LOGGING_ENABLED")
 
 	result = IsLoggingEnabled()
 	if !result {
-		t.Error("Expected logging to be enabled when REDFISH_LOGGING_ENABLED=true")
+		t.Errorf("Expected true, got %v", result)
 	}
+
+	// Test with environment variable set to false
+	os.Setenv("REDFISH_LOGGING_ENABLED", "false")
+	result = IsLoggingEnabled()
+	if result {
+		t.Errorf("Expected false, got %v", result)
+	}
+
+	// Test with environment variable set to mixed case
+	os.Setenv("REDFISH_LOGGING_ENABLED", "TRUE")
+	result = IsLoggingEnabled()
+	if !result {
+		t.Errorf("Expected true for 'TRUE', got %v", result)
+	}
+}
+
+func TestSanitizeHeaders(t *testing.T) {
+	// Create test headers
+	headers := http.Header{}
+	headers.Set("User-Agent", "test-agent")
+	headers.Set("Accept", "application/json")
+	headers.Set("Content-Type", "application/json")
+	headers.Set("Authorization", "Basic dXNlcjpwYXNz") // base64 encoded credentials
+	headers.Set("Cookie", "session=abc123")
+	headers.Set("X-Forwarded-For", "192.168.1.1")
+	headers.Set("X-Redfish-User", "testuser")
+	headers.Set("X-API-Key", "secret-key")
+	headers.Set("Host", "example.com")
+
+	// Sanitize headers
+	sanitized := sanitizeHeaders(headers)
+
+	// Verify safe headers are preserved
+	expectedSafe := map[string]string{
+		"User-Agent":      "test-agent",
+		"Accept":          "application/json",
+		"Content-Type":    "application/json",
+		"X-Forwarded-For": "192.168.1.1",
+		"X-Redfish-User":  "testuser",
+		"Host":            "example.com",
+	}
+
+	for key, expectedValue := range expectedSafe {
+		if value, exists := sanitized[key]; !exists {
+			t.Errorf("Expected safe header '%s' to be preserved", key)
+		} else if value != expectedValue {
+			t.Errorf("Expected header '%s' to be '%s', got '%s'", key, expectedValue, value)
+		}
+	}
+
+	// Verify sensitive headers are removed
+	sensitiveHeaders := []string{"Authorization", "Cookie", "X-API-Key"}
+	for _, header := range sensitiveHeaders {
+		if _, exists := sanitized[header]; exists {
+			t.Errorf("Expected sensitive header '%s' to be removed", header)
+		}
+	}
+
+	// Verify header count
+	expectedCount := len(expectedSafe)
+	if len(sanitized) != expectedCount {
+		t.Errorf("Expected %d sanitized headers, got %d", expectedCount, len(sanitized))
+	}
+}
+
+func TestSanitizeHeaders_EmptyHeaders(t *testing.T) {
+	headers := http.Header{}
+	sanitized := sanitizeHeaders(headers)
+
+	if len(sanitized) != 0 {
+		t.Errorf("Expected empty sanitized headers, got %d headers", len(sanitized))
+	}
+}
+
+func TestSanitizeHeaders_OnlySensitiveHeaders(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("Authorization", "Basic dXNlcjpwYXNz")
+	headers.Set("Cookie", "session=abc123")
+	headers.Set("X-API-Key", "secret-key")
+
+	sanitized := sanitizeHeaders(headers)
+
+	if len(sanitized) != 0 {
+		t.Errorf("Expected no sanitized headers when only sensitive headers present, got %d", len(sanitized))
+	}
+}
+
+func TestSanitizeHeaders_CaseInsensitive(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("user-agent", "test-agent")
+	headers.Set("USER-AGENT", "test-agent-2")
+	headers.Set("User-Agent", "test-agent-3")
+
+	sanitized := sanitizeHeaders(headers)
+
+	// Should preserve the last set value (case-sensitive matching)
+	if value, exists := sanitized["User-Agent"]; !exists {
+		t.Error("Expected User-Agent header to be preserved")
+	} else if value != "test-agent-3" {
+		t.Errorf("Expected User-Agent to be 'test-agent-3', got '%s'", value)
+	}
+}
+
+func TestSanitizeHeaders_AllSafeHeaders(t *testing.T) {
+	headers := http.Header{}
+
+	// Set all safe headers
+	safeHeaders := []string{
+		"User-Agent",
+		"Accept",
+		"Content-Type",
+		"X-Forwarded-For",
+		"X-Real-IP",
+		"X-Client-IP",
+		"Content-Length",
+		"Accept-Encoding",
+		"Cache-Control",
+		"X-Redfish-User",
+		"Host",
+		"Connection",
+		"Upgrade",
+		"Sec-WebSocket-Key",
+		"Sec-WebSocket-Version",
+		"Origin",
+		"Referer",
+	}
+
+	for _, header := range safeHeaders {
+		headers.Set(header, "test-value-"+header)
+	}
+
+	sanitized := sanitizeHeaders(headers)
+
+	// Verify all safe headers are preserved
+	for _, header := range safeHeaders {
+		if value, exists := sanitized[header]; !exists {
+			t.Errorf("Expected safe header '%s' to be preserved", header)
+		} else if value != "test-value-"+header {
+			t.Errorf("Expected header '%s' to be 'test-value-%s', got '%s'", header, header, value)
+		}
+	}
+
+	// Verify count matches
+	if len(sanitized) != len(safeHeaders) {
+		t.Errorf("Expected %d sanitized headers, got %d", len(safeHeaders), len(sanitized))
+	}
+}
+
+func TestLogSafeHeaders(t *testing.T) {
+	// Initialize logger for testing
+	Init("debug")
+
+	// Create test headers
+	headers := http.Header{}
+	headers.Set("User-Agent", "test-agent")
+	headers.Set("Authorization", "Basic dXNlcjpwYXNz")
+	headers.Set("X-Redfish-User", "testuser")
+
+	// This should not panic and should log safely
+	LogSafeHeaders("Test safe headers", headers, "test-correlation-id")
+}
+
+func TestLogSafeHeaders_WithCorrelationID(t *testing.T) {
+	// Initialize logger for testing
+	Init("debug")
+
+	// Create test headers
+	headers := http.Header{}
+	headers.Set("User-Agent", "test-agent")
+	headers.Set("Accept", "application/json")
+
+	// Test with correlation ID
+	correlationID := "test-correlation-123"
+	LogSafeHeaders("Test headers with correlation", headers, correlationID)
+}
+
+func TestLogSafeHeaders_EmptyCorrelationID(t *testing.T) {
+	// Initialize logger for testing
+	Init("debug")
+
+	// Create test headers
+	headers := http.Header{}
+	headers.Set("User-Agent", "test-agent")
+
+	// Test with empty correlation ID
+	LogSafeHeaders("Test headers empty correlation", headers, "")
 }
 
 func TestLogEntry_JSON(t *testing.T) {
