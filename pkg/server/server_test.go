@@ -2631,3 +2631,438 @@ func TestHandleVirtualMediaRequest(t *testing.T) {
 		assert.Contains(t, response, "error")
 	})
 }
+
+// TestHandleVirtualMediaCollection tests the handleVirtualMediaCollection HTTP handler
+func TestHandleVirtualMediaCollection(t *testing.T) {
+	testConfig := &config.Config{
+		Server: config.ServerConfig{
+			Port: 8080,
+			Host: "localhost",
+		},
+		Chassis: []config.ChassisConfig{
+			{
+				Name:      "chassis1",
+				Namespace: "default",
+			},
+		},
+	}
+	mockClient := &kubevirt.Client{}
+	server := NewServer(testConfig, mockClient)
+
+	// Test 1: Valid virtual media collection request
+	t.Run("Valid_GET_request", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/redfish/v1/Systems/test-vm/VirtualMedia", nil)
+		w := httptest.NewRecorder()
+
+		// Add authentication context
+		authCtx := &auth.AuthContext{
+			User: &auth.User{
+				Username: "testuser",
+				Password: "testpass",
+				Chassis:  []string{"chassis1"},
+			},
+			Chassis: "chassis1",
+		}
+		ctx := logger.WithAuth(req.Context(), authCtx)
+		req = req.WithContext(ctx)
+
+		server.handleVirtualMediaCollection(w, req, "test-vm")
+
+		// Should return 404 since VM doesn't exist in mock client
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Contains(t, response, "error")
+	})
+
+	// Test 2: No authentication context
+	t.Run("No_authentication_context", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/redfish/v1/Systems/test-vm/VirtualMedia", nil)
+		w := httptest.NewRecorder()
+
+		// No authentication context added
+
+		server.handleVirtualMediaCollection(w, req, "test-vm")
+
+		assert.Equal(t, http.StatusForbidden, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Contains(t, response, "error")
+	})
+
+	// Test 3: User without chassis access
+	t.Run("User_without_chassis_access", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/redfish/v1/Systems/test-vm/VirtualMedia", nil)
+		w := httptest.NewRecorder()
+
+		// Add authentication context with different chassis
+		authCtx := &auth.AuthContext{
+			User: &auth.User{
+				Username: "testuser",
+				Password: "testpass",
+				Chassis:  []string{"other-chassis"},
+			},
+			Chassis: "other-chassis",
+		}
+		ctx := logger.WithAuth(req.Context(), authCtx)
+		req = req.WithContext(ctx)
+
+		server.handleVirtualMediaCollection(w, req, "test-vm")
+
+		// Should return 404 since VM not found in accessible chassis
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Contains(t, response, "error")
+	})
+
+	// Test 4: Invalid HTTP method
+	t.Run("Invalid_method_POST", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/redfish/v1/Systems/test-vm/VirtualMedia", nil)
+		w := httptest.NewRecorder()
+
+		// Add authentication context
+		authCtx := &auth.AuthContext{
+			User: &auth.User{
+				Username: "testuser",
+				Password: "testpass",
+				Chassis:  []string{"chassis1"},
+			},
+			Chassis: "chassis1",
+		}
+		ctx := logger.WithAuth(req.Context(), authCtx)
+		req = req.WithContext(ctx)
+
+		server.handleVirtualMediaCollection(w, req, "test-vm")
+
+		// Should return 404 since VM doesn't exist in mock client
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Contains(t, response, "error")
+	})
+}
+
+// TestHandleGetVirtualMedia tests the handleGetVirtualMedia HTTP handler
+func TestHandleGetVirtualMedia(t *testing.T) {
+	testConfig := &config.Config{
+		Server: config.ServerConfig{
+			Port: 8080,
+			Host: "localhost",
+		},
+		Chassis: []config.ChassisConfig{
+			{
+				Name:      "chassis1",
+				Namespace: "default",
+			},
+		},
+	}
+	mockClient := &kubevirt.Client{}
+	server := NewServer(testConfig, mockClient)
+
+	// Test 1: Valid virtual media GET request
+	t.Run("Valid_GET_request", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/redfish/v1/Systems/test-vm/VirtualMedia/Cd", nil)
+		w := httptest.NewRecorder()
+
+		// Add authentication context
+		authCtx := &auth.AuthContext{
+			User: &auth.User{
+				Username: "testuser",
+				Password: "testpass",
+				Chassis:  []string{"chassis1"},
+			},
+			Chassis: "chassis1",
+		}
+		ctx := logger.WithAuth(req.Context(), authCtx)
+		req = req.WithContext(ctx)
+
+		server.handleGetVirtualMedia(w, req, "test-vm", "Cd")
+
+		// Should return 404 since VM doesn't exist in mock client
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Contains(t, response, "error")
+	})
+
+	// Test 2: No authentication context
+	t.Run("No_authentication_context", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/redfish/v1/Systems/test-vm/VirtualMedia/Cd", nil)
+		w := httptest.NewRecorder()
+
+		// No authentication context added
+
+		server.handleGetVirtualMedia(w, req, "test-vm", "Cd")
+
+		assert.Equal(t, http.StatusForbidden, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Contains(t, response, "error")
+	})
+
+	// Test 3: User without chassis access
+	t.Run("User_without_chassis_access", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/redfish/v1/Systems/test-vm/VirtualMedia/Cd", nil)
+		w := httptest.NewRecorder()
+
+		// Add authentication context with different chassis
+		authCtx := &auth.AuthContext{
+			User: &auth.User{
+				Username: "testuser",
+				Password: "testpass",
+				Chassis:  []string{"other-chassis"},
+			},
+			Chassis: "other-chassis",
+		}
+		ctx := logger.WithAuth(req.Context(), authCtx)
+		req = req.WithContext(ctx)
+
+		server.handleGetVirtualMedia(w, req, "test-vm", "Cd")
+
+		// Should return 404 since VM not found in accessible chassis
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Contains(t, response, "error")
+	})
+
+	// Test 4: Different media ID (cdrom0)
+	t.Run("Different_media_ID_cdrom0", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/redfish/v1/Systems/test-vm/VirtualMedia/cdrom0", nil)
+		w := httptest.NewRecorder()
+
+		// Add authentication context
+		authCtx := &auth.AuthContext{
+			User: &auth.User{
+				Username: "testuser",
+				Password: "testpass",
+				Chassis:  []string{"chassis1"},
+			},
+			Chassis: "chassis1",
+		}
+		ctx := logger.WithAuth(req.Context(), authCtx)
+		req = req.WithContext(ctx)
+
+		server.handleGetVirtualMedia(w, req, "test-vm", "cdrom0")
+
+		// Should return 404 since VM doesn't exist in mock client
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Contains(t, response, "error")
+	})
+
+	// Test 5: Invalid HTTP method
+	t.Run("Invalid_method_POST", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/redfish/v1/Systems/test-vm/VirtualMedia/Cd", nil)
+		w := httptest.NewRecorder()
+
+		// Add authentication context
+		authCtx := &auth.AuthContext{
+			User: &auth.User{
+				Username: "testuser",
+				Password: "testpass",
+				Chassis:  []string{"chassis1"},
+			},
+			Chassis: "chassis1",
+		}
+		ctx := logger.WithAuth(req.Context(), authCtx)
+		req = req.WithContext(ctx)
+
+		server.handleGetVirtualMedia(w, req, "test-vm", "Cd")
+
+		// Should return 404 since VM doesn't exist in mock client
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Contains(t, response, "error")
+	})
+}
+
+// TestHandleBootUpdateDirect tests the handleBootUpdate HTTP handler directly
+func TestHandleBootUpdateDirect(t *testing.T) {
+	testConfig := &config.Config{
+		Server: config.ServerConfig{
+			Port: 8080,
+			Host: "localhost",
+		},
+		Chassis: []config.ChassisConfig{
+			{
+				Name:      "chassis1",
+				Namespace: "default",
+			},
+		},
+	}
+	mockClient := &kubevirt.Client{}
+	server := NewServer(testConfig, mockClient)
+
+	// Test 1: Valid boot update request with Boot field
+	t.Run("Valid_boot_update_with_Boot_field", func(t *testing.T) {
+		req := httptest.NewRequest("PATCH", "/redfish/v1/Systems/test-vm", strings.NewReader(`{
+			"Boot": {
+				"BootSourceOverrideEnabled": "Once",
+				"BootSourceOverrideTarget": "Cd",
+				"BootSourceOverrideMode": "UEFI"
+			}
+		}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		// Add authentication context
+		authCtx := &auth.AuthContext{
+			User: &auth.User{
+				Username: "testuser",
+				Password: "testpass",
+				Chassis:  []string{"chassis1"},
+			},
+			Chassis: "chassis1",
+		}
+		ctx := logger.WithAuth(req.Context(), authCtx)
+		req = req.WithContext(ctx)
+
+		server.handleBootUpdate(w, req, "test-vm")
+
+		// Should return 404 since VM doesn't exist in mock client
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Contains(t, response, "error")
+	})
+
+	// Test 2: Valid boot update request with direct fields (backward compatibility)
+	t.Run("Valid_boot_update_with_direct_fields", func(t *testing.T) {
+		req := httptest.NewRequest("PATCH", "/redfish/v1/Systems/test-vm", strings.NewReader(`{
+			"BootSourceOverrideEnabled": "Once",
+			"BootSourceOverrideTarget": "Hdd",
+			"BootSourceOverrideMode": "UEFI"
+		}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		// Add authentication context
+		authCtx := &auth.AuthContext{
+			User: &auth.User{
+				Username: "testuser",
+				Password: "testpass",
+				Chassis:  []string{"chassis1"},
+			},
+			Chassis: "chassis1",
+		}
+		ctx := logger.WithAuth(req.Context(), authCtx)
+		req = req.WithContext(ctx)
+
+		server.handleBootUpdate(w, req, "test-vm")
+
+		// Should return 404 since VM doesn't exist in mock client
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Contains(t, response, "error")
+	})
+
+	// Test 3: Invalid JSON request body
+	t.Run("Invalid_JSON_request_body", func(t *testing.T) {
+		req := httptest.NewRequest("PATCH", "/redfish/v1/Systems/test-vm", strings.NewReader(`{
+			"Boot": {
+				"BootSourceOverrideEnabled": "Once",
+				"BootSourceOverrideTarget": "Cd",
+				"BootSourceOverrideMode": "UEFI"
+		`)) // Missing closing brace
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		// Add authentication context
+		authCtx := &auth.AuthContext{
+			User: &auth.User{
+				Username: "testuser",
+				Password: "testpass",
+				Chassis:  []string{"chassis1"},
+			},
+			Chassis: "chassis1",
+		}
+		ctx := logger.WithAuth(req.Context(), authCtx)
+		req = req.WithContext(ctx)
+
+		server.handleBootUpdate(w, req, "test-vm")
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Contains(t, response, "error")
+	})
+
+	// Test 4: No authentication context
+	t.Run("No_authentication_context", func(t *testing.T) {
+		req := httptest.NewRequest("PATCH", "/redfish/v1/Systems/test-vm", strings.NewReader(`{
+			"Boot": {
+				"BootSourceOverrideEnabled": "Once"
+			}
+		}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		// No authentication context added
+
+		server.handleBootUpdate(w, req, "test-vm")
+
+		assert.Equal(t, http.StatusForbidden, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Contains(t, response, "error")
+	})
+
+	// Test 5: Empty request body
+	t.Run("Empty_request_body", func(t *testing.T) {
+		req := httptest.NewRequest("PATCH", "/redfish/v1/Systems/test-vm", strings.NewReader(""))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		// Add authentication context
+		authCtx := &auth.AuthContext{
+			User: &auth.User{
+				Username: "testuser",
+				Password: "testpass",
+				Chassis:  []string{"chassis1"},
+			},
+			Chassis: "chassis1",
+		}
+		ctx := logger.WithAuth(req.Context(), authCtx)
+		req = req.WithContext(ctx)
+
+		server.handleBootUpdate(w, req, "test-vm")
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Contains(t, response, "error")
+	})
+}
