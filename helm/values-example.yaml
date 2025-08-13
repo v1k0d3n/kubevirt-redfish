@@ -105,30 +105,6 @@ rbac:
     create: true
     name: "kubevirt-redfish-binding"
 
-  # OpenShift Security Context Constraints
-  scc:
-    # Enable/disable SCC functionality (enabled by default)
-    # When enabled, automatically detects OpenShift and applies appropriate SCC
-    enabled: true
-    # Enable/disable custom SCC creation (disabled by default)
-    # Set to true only if you need a custom SCC (not recommended)
-    # Most users should use OpenShift's built-in 'restricted' SCC instead
-    custom: false
-    # Custom SCC name (only used if custom: true)
-    customName: "kubevirt-redfish-scc"
-    labels: {}
-    annotations: {}
-    priority: 10
-    runAsUser:
-      min: 1000000000
-      max: 1000099999
-    fsGroup:
-      min: 1000000000
-      max: 1000099999
-    supplementalGroups:
-      min: 1000000000
-      max: 1000099999
-
 # =============================================================================
 # KUBEVIRT CONFIGURATION
 # =============================================================================
@@ -224,14 +200,13 @@ configMap:
 
 securityContext:
   runAsNonRoot: true
-  runAsUser: 1000960000
-  runAsGroup: 1000960000
+  capabilities:
+    drop:
+      - ALL
+  allowPrivilegeEscalation: false
 
 podSecurityContext:
   runAsNonRoot: true
-  runAsUser: 1000960000
-  runAsGroup: 1000960000
-  fsGroup: 1000960000
 
 # =============================================================================
 # PLACEMENT CONFIGURATION

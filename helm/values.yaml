@@ -193,44 +193,6 @@ rbac:
     # Additional labels for the ClusterRoleBinding
     labels: {}
   
-  # Security Context Constraints (OpenShift only)
-  scc:
-    # Enable/disable SCC functionality (enabled by default)
-    # When enabled, automatically detects OpenShift and applies appropriate SCC
-    enabled: true
-    
-    # Enable/disable custom SCC creation (disabled by default)
-    # Set to true only if you need a custom SCC (not recommended)
-    # Most users should use OpenShift's built-in 'restricted' SCC instead
-    custom: false
-    
-    # Custom SCC name (only used if custom: true)
-    customName: "kubevirt-redfish-scc"
-    
-    # Additional labels for the SCC
-    labels: {}
-    
-    # Additional annotations for the SCC
-    annotations: {}
-    
-    # Priority (higher numbers = higher priority)
-    priority: 10
-    
-    # User ID range for the SCC
-    runAsUser:
-      min: 1000000000
-      max: 1000099999
-    
-    # File system group range
-    fsGroup:
-      min: 1000000000
-      max: 1000099999
-    
-    # Supplemental groups range
-    supplementalGroups:
-      min: 1000000000
-      max: 1000099999
-
 # =============================================================================
 # SERVER CONFIGURATION
 # =============================================================================
@@ -365,28 +327,15 @@ configMap:
 securityContext:
   # Run as non-root user
   runAsNonRoot: true
-  
-  # User ID to run as (OpenShift compatible)
-  # Note: For OpenShift, use UIDs in range 1000960000-1000969999
-  runAsUser: 1000960000
-  
-  # Group ID to run as (OpenShift compatible)
-  runAsGroup: 1000960000
+  capabilities:
+    drop:
+      - ALL
+  allowPrivilegeEscalation: false
 
 # Pod security context
 podSecurityContext:
   # Run as non-root user
   runAsNonRoot: true
-  
-  # User ID to run as (OpenShift compatible)
-  # Note: For OpenShift, use UIDs in range 1000960000-1000969999
-  runAsUser: 1000960000
-  
-  # Group ID to run as (OpenShift compatible)
-  runAsGroup: 1000960000
-  
-  # File system group ID (OpenShift compatible)
-  fsGroup: 1000960000
 
 # =============================================================================
 # PLACEMENT CONFIGURATION
