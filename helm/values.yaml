@@ -214,6 +214,13 @@ server:
 # CHASSIS CONFIGURATION
 # =============================================================================
 
+# Chassis represent logical groupings of VMs, typically corresponding to namespaces.
+# Each chassis creates a Redfish-compliant URI structure:
+# /redfish/v1/Chassis/{chassis-name}/Systems/{vm-name}
+#
+# This eliminates VM name collisions across different namespaces and provides
+# better Redfish specification compliance.
+
 # Chassis configuration defines the virtual "chassis" that the Redfish API will expose
 # Each chassis represents a logical grouping of VMs, typically corresponding to a namespace
 chassis:
@@ -229,6 +236,11 @@ chassis:
 # AUTHENTICATION CONFIGURATION
 # =============================================================================
 
+# Users are granted access to specific chassis (namespaces).
+# Each user can only access VMs within their assigned chassis.
+# Legacy endpoints (/redfish/v1/Systems/{vm-name}) are still supported
+# with automatic redirects to chassis-based URLs.
+#
 # Authentication configuration for Redfish API access
 # IMPORTANT: Change these credentials for production deployments!
 authentication:

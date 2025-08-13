@@ -301,7 +301,7 @@ clean:
 	rm -f kubevirt-redfish
 	rm -f kubevirt-redfish-amd64
 	rm -f kubevirt-redfish-arm64
-	rm -f coverage.out
+	rm -f *coverage.out
 	rm -f coverage.html
 	rm -f $(HELM_CHART_NAME)-*.tgz
 	rm -f helm/Chart.yaml.bak
