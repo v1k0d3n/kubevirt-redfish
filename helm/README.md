@@ -200,6 +200,22 @@ authentication:
 
 ## API Usage
 
+### **New Chassis-Based URI Structure**
+
+The API now uses Redfish-compliant chassis-based URI structure to resolve VM name collisions and improve API compliance:
+
+```
+/redfish/v1/Chassis/{chassis-id}/Systems/{system-id}
+```
+
+**Benefits:**
+- **Eliminates VM name collisions** across different namespaces
+- **Redfish specification compliant** URI structure  
+- **Clear resource hierarchy** with chassis isolation
+- **Backward compatibility** maintained with automatic redirects
+
+**Migration:** Legacy endpoints (`/redfish/v1/Systems/{system-id}`) are still supported with automatic redirects to the new chassis-based structure.
+
 ### Access the Redfish API
 
 ```bash
@@ -216,26 +232,36 @@ kubectl port-forward svc/kubevirt-redfish 8443:8443 -n your-namespace
 # Set variables
 export ROUTE_URL=kubevirt-redfish-default.apps.clustername.example.com
 export TEST_VM=my-vm-name
+export TEST_CHASSIS=production
 export TEST_USER='admin'
 export TEST_PASS='password'
 
 # Root endpoint (unauthenticated, required by DMTF standards)
 curl -k https://$ROUTE_URL/redfish/v1/
 
-# Get VM information (authenticated)
-curl -u $TEST_USER:$TEST_PASS https://$ROUTE_URL/redfish/v1/Systems/$TEST_VM
+# Get chassis information (authenticated)
+curl -u $TEST_USER:$TEST_PASS https://$ROUTE_URL/redfish/v1/Chassis
 
-# Power on a VM
+# Get systems in a specific chassis (authenticated)
+curl -u $TEST_USER:$TEST_PASS https://$ROUTE_URL/redfish/v1/Chassis/$TEST_CHASSIS/Systems
+
+# Get VM information using chassis-based URI (Recommended)
+curl -u $TEST_USER:$TEST_PASS https://$ROUTE_URL/redfish/v1/Chassis/$TEST_CHASSIS/Systems/$TEST_VM
+
+# Power on a VM using chassis-based URI (Recommended)
 curl -X POST -u $TEST_USER:$TEST_PASS \
   -H "Content-Type: application/json" \
   -d '{"ResetType": "On"}' \
-  https://$ROUTE_URL/redfish/v1/Systems/$TEST_VM/Actions/ComputerSystem.Reset
+  https://$ROUTE_URL/redfish/v1/Chassis/$TEST_CHASSIS/Systems/$TEST_VM/Actions/ComputerSystem.Reset
 
-# Insert virtual media (ISO)
+# Insert virtual media (ISO) using chassis-based URI (Recommended)
 curl -X POST -u $TEST_USER:$TEST_PASS \
   -H "Content-Type: application/json" \
   -d '{"Image": "https://example.com/boot.iso"}' \
-  https://$ROUTE_URL/redfish/v1/Systems/$TEST_VM/VirtualMedia/cdrom0/Actions/VirtualMedia.InsertMedia
+  https://$ROUTE_URL/redfish/v1/Chassis/$TEST_CHASSIS/Systems/$TEST_VM/VirtualMedia/cdrom0/Actions/VirtualMedia.InsertMedia
+
+# Legacy endpoints (still supported with automatic redirects)
+curl -u $TEST_USER:$TEST_PASS https://$ROUTE_URL/redfish/v1/Systems/$TEST_VM
 ```
 
 ## Virtual Media Operations

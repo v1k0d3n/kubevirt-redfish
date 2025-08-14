@@ -21,6 +21,8 @@ A Redfish-compatible API server for KubeVirt/OpenShift Virtualization that enabl
   - [Verification](#verification)
 - [Configuration](#configuration)
 - [Usage](#usage)
+  - [**New Chassis-Based URI Structure**](#new-chassis-based-uri-structure)
+  - [**API Examples**](#api-examples)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -171,25 +173,65 @@ datavolume:
 
 Once deployed, the Redfish API will be available at the service (k8s) or route (OCP) endpoint. In OpenShift, this will be the route endpoint (which the Helm Chart will use, if configured).
 
+### **New Chassis-Based URI Structure**
+
+The API now uses Redfish-compliant chassis-based URI structure to resolve VM name collisions and improve API compliance:
+
+```
+/redfish/v1/Chassis/{chassis-id}/Systems/{system-id}
+```
+
+**Benefits:**
+- **Eliminates VM name collisions** across different namespaces
+- **Redfish specification compliant** URI structure
+- **Clear resource hierarchy** with chassis isolation
+- **Backward compatibility** maintained with automatic redirects
+
+### **API Examples**
+
 **Example** - Query the root URL without authentication (this is defined as per the Redfish specification)
 
 ```
 curl -k https://kubevirt-redfish-{namespace}.apps.{cluster_name}.{domain_name}/redfish/v1/
 ```
 
-**Example** - Return a list of managed systems (VMs)
+**Example** - Return a list of chassis (namespaces)
 
 ```
-curl -k -u user:pass https://kubevirt-redfish-{namespace}.apps.{cluster_name}.{domain_name}/redfish/v1/Systems
+curl -k -u user:pass https://kubevirt-redfish-{namespace}.apps.{cluster_name}.{domain_name}/redfish/v1/Chassis
 ```
 
-**Example** - Powering on a VM
+**Example** - Return a list of systems in a specific chassis
 
 ```
-curl -kX POST -u user:pass https://kubevirt-redfish-{namespace}.apps.{cluster_name}.{domain_name}/redfish/v1/Systems/{vm-id}/Actions/ComputerSystem.Reset \
+curl -k -u user:pass https://kubevirt-redfish-{namespace}.apps.{cluster_name}.{domain_name}/redfish/v1/Chassis/{chassis-id}/Systems
+```
+
+**Example** - Get system details using chassis-based URI (Recommended)
+
+```
+curl -k -u user:pass https://kubevirt-redfish-{namespace}.apps.{cluster_name}.{domain_name}/redfish/v1/Chassis/{chassis-id}/Systems/{vm-id}
+```
+
+**Example** - Powering on a VM using chassis-based URI (Recommended)
+
+```
+curl -kX POST -u user:pass https://kubevirt-redfish-{namespace}.apps.{cluster_name}.{domain_name}/redfish/v1/Chassis/{chassis-id}/Systems/{vm-id}/Actions/ComputerSystem.Reset \
   -H "Content-Type: application/json" \
   -d '{"ResetType": "On"}'
 ```
+
+### **Backward Compatibility**
+
+**Legacy endpoints are still supported** with automatic redirects to the new chassis-based structure:
+
+**Example** - Legacy system endpoint (automatically redirects to chassis-based URL)
+
+```
+curl -k -u user:pass https://kubevirt-redfish-{namespace}.apps.{cluster_name}.{domain_name}/redfish/v1/Systems/{vm-id}
+```
+
+**Note:** Legacy endpoints will return deprecation headers and redirect to the new chassis-based URLs. It's recommended to migrate to the new chassis-based endpoints for better compatibility and to avoid VM name collisions.
 
 **Example** - Returned output from powering on a VM
 ```json
