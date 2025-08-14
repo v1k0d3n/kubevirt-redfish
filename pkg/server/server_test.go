@@ -3434,6 +3434,117 @@ func TestChassisBasedCollisionResolution(t *testing.T) {
 
 		assert.Equal(t, http.StatusForbidden, w.Code)
 	})
+
+	t.Run("Legacy_Endpoint_Collision_Resolution", func(t *testing.T) {
+		// Test that legacy endpoints redirect to the correct chassis-based endpoint
+		// This demonstrates how our solution resolves the collision problem
+
+		// Create a server with test mode enabled to simulate VM existence
+		testConfigWithTestMode := &config.Config{
+			Server: config.ServerConfig{
+				TestMode: true,
+			},
+			Chassis: []config.ChassisConfig{
+				{
+					Name:      "production-chassis",
+					Namespace: "production",
+				},
+				{
+					Name:      "development-chassis",
+					Namespace: "development",
+				},
+			},
+		}
+		serverWithTestMode := NewServer(testConfigWithTestMode, mockClient)
+
+		// Test legacy endpoint access for production user
+		req1 := httptest.NewRequest("GET", "/redfish/v1/Systems/vm-name-01", nil)
+		w1 := httptest.NewRecorder()
+
+		authCtx1 := &auth.AuthContext{
+			User: &auth.User{
+				Username: "prod-user",
+				Password: "testpass",
+				Chassis:  []string{"production-chassis"},
+			},
+			Chassis: "",
+		}
+		ctx1 := logger.WithAuth(req1.Context(), authCtx1)
+		req1 = req1.WithContext(ctx1)
+
+		serverWithTestMode.handleSystem(w1, req1)
+
+		// Should redirect to production chassis
+		assert.Equal(t, http.StatusMovedPermanently, w1.Code)
+		assert.Equal(t, "/redfish/v1/Chassis/production-chassis/Systems/vm-name-01", w1.Header().Get("Location"))
+
+		// Test legacy endpoint access for development user
+		req2 := httptest.NewRequest("GET", "/redfish/v1/Systems/vm-name-01", nil)
+		w2 := httptest.NewRecorder()
+
+		authCtx2 := &auth.AuthContext{
+			User: &auth.User{
+				Username: "dev-user",
+				Password: "testpass",
+				Chassis:  []string{"development-chassis"},
+			},
+			Chassis: "",
+		}
+		ctx2 := logger.WithAuth(req2.Context(), authCtx2)
+		req2 = req2.WithContext(ctx2)
+
+		serverWithTestMode.handleSystem(w2, req2)
+
+		// Should redirect to development chassis
+		assert.Equal(t, http.StatusMovedPermanently, w2.Code)
+		assert.Equal(t, "/redfish/v1/Chassis/development-chassis/Systems/vm-name-01", w2.Header().Get("Location"))
+
+		// Verify both redirects point to different chassis (resolving the collision)
+		assert.NotEqual(t, w1.Header().Get("Location"), w2.Header().Get("Location"))
+	})
+
+	t.Run("Multiple_Chassis_Access", func(t *testing.T) {
+		// Test user with access to multiple chassis
+		// This demonstrates how the system resolves which chassis to use
+
+		testConfigWithTestMode := &config.Config{
+			Server: config.ServerConfig{
+				TestMode: true,
+			},
+			Chassis: []config.ChassisConfig{
+				{
+					Name:      "production-chassis",
+					Namespace: "production",
+				},
+				{
+					Name:      "development-chassis",
+					Namespace: "development",
+				},
+			},
+		}
+		serverWithTestMode := NewServer(testConfigWithTestMode, mockClient)
+
+		// User with access to both chassis
+		req := httptest.NewRequest("GET", "/redfish/v1/Systems/vm-name-01", nil)
+		w := httptest.NewRecorder()
+
+		authCtx := &auth.AuthContext{
+			User: &auth.User{
+				Username: "admin-user",
+				Password: "testpass",
+				Chassis:  []string{"production-chassis", "development-chassis"},
+			},
+			Chassis: "",
+		}
+		ctx := logger.WithAuth(req.Context(), authCtx)
+		req = req.WithContext(ctx)
+
+		serverWithTestMode.handleSystem(w, req)
+
+		// Should redirect to the first available chassis (production-chassis)
+		assert.Equal(t, http.StatusMovedPermanently, w.Code)
+		assert.Equal(t, "/redfish/v1/Chassis/production-chassis/Systems/vm-name-01", w.Header().Get("Location"))
+	})
 }
 
 // TestChassisBasedURIParsing tests the URI parsing logic for chassis-based endpoints
