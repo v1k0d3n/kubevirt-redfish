@@ -286,7 +286,7 @@ datavolume:
   
   # Helper image for ISO copy operations
   # Change this to use a private registry image if needed
-  helper_image: "alpine:latest"
+  helper_image: "registry.access.redhat.com/ubi8/ubi-minimal:latest"
 
 # =============================================================================
 # VOLUMES CONFIGURATION

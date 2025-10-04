@@ -169,7 +169,7 @@ datavolume:
   storage_class: "lvms-vg1"
   vm_update_timeout: "2m"
   iso_download_timeout: "30m"
-  helper_image: "alpine:latest"  # Change to private registry image if needed
+  helper_image: "registry.access.redhat.com/ubi8/ubi-minimal:latest"  # Change to private registry image if needed
 
 # =============================================================================
 # VOLUMES CONFIGURATION

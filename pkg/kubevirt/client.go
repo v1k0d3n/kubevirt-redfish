@@ -585,10 +585,10 @@ func (c *Client) SetVMPowerState(namespace, name, state string) error {
 		// Force stop the VM using runStrategy, force-stop annotation, and zero grace period
 		// This mirrors the behavior of: virtctl stop --grace-period 0 --force <vm name>
 		patch := []byte(`[
-			{"op": "replace", "path": "/spec/runStrategy", "value": "Halted"},
-			{"op": "add", "path": "/metadata/annotations/kubevirt.io~1force-stop", "value": "true"},
-			{"op": "replace", "path": "/spec/terminationGracePeriodSeconds", "value": 0}
-		]`)
+			 {"op": "replace", "path": "/spec/runStrategy", "value": "Halted"},
+			 {"op": "add", "path": "/metadata/annotations/kubevirt.io~1force-stop", "value": "true"},
+			 {"op": "replace", "path": "/spec/terminationGracePeriodSeconds", "value": 0}
+		 ]`)
 
 		// Debug: Log before making the API call
 		logger.DebugStructured("Making force stop API call with dynamic client", map[string]interface{}{
@@ -670,10 +670,10 @@ func (c *Client) SetVMPowerState(namespace, name, state string) error {
 
 		// Force restart the VM by force stopping (with zero grace period) and starting
 		stopPatch := []byte(`[
-			{"op": "replace", "path": "/spec/runStrategy", "value": "Halted"},
-			{"op": "add", "path": "/metadata/annotations/kubevirt.io~1force-stop", "value": "true"},
-			{"op": "replace", "path": "/spec/terminationGracePeriodSeconds", "value": 0}
-		]`)
+			 {"op": "replace", "path": "/spec/runStrategy", "value": "Halted"},
+			 {"op": "add", "path": "/metadata/annotations/kubevirt.io~1force-stop", "value": "true"},
+			 {"op": "replace", "path": "/spec/terminationGracePeriodSeconds", "value": 0}
+		 ]`)
 
 		// Debug: Log before making the stop API call
 		logger.DebugStructured("Making force restart stop API call", map[string]interface{}{
@@ -1308,49 +1308,88 @@ func (c *Client) IsVirtualMediaInserted(namespace, name, mediaID string) (bool, 
 		return false, fmt.Errorf("failed to get VM %s: %w", name, err)
 	}
 
-	// Check for the specific CD-ROM device in the VM spec
+	// Step 1: Find the CD-ROM device in the VM spec
+	var volumeRef string
 	devices, found, err := unstructured.NestedMap(vm.Object, "spec", "template", "spec", "domain", "devices")
-	if err == nil && found {
-		if disks, found := devices["disks"].([]interface{}); found {
-			for _, disk := range disks {
-				if diskMap, ok := disk.(map[string]interface{}); ok {
-					if diskName, found := diskMap["name"].(string); found && diskName == mediaID {
-						// Check if this is a CD-ROM device
-						if cdrom, found := diskMap["cdrom"]; found && cdrom != nil {
-							// Check if the corresponding PVC is bound and ready
-							pvcName := fmt.Sprintf("%s-bootiso", name)
-							pvc, err := c.kubernetesClient.CoreV1().PersistentVolumeClaims(namespace).Get(context.Background(), pvcName, metav1.GetOptions{})
-							if err != nil {
-								logger.Debug("PVC %s not found for VM %s/%s: %v", pvcName, namespace, name, err)
-								return false, nil
-							}
+	if err != nil || !found {
+		logger.Debug("No devices found in VM %s/%s", namespace, name)
+		return false, nil
+	}
 
-							// Check if PVC is bound and has data
-							if pvc.Status.Phase == corev1.ClaimBound {
-								// Additional check: verify the PVC has actual data by checking if it's not empty
-								// This is important for DataVolume imports that may take time
-								if len(pvc.Status.Capacity) > 0 {
-									// Check if there's actual storage allocated
-									if storage, found := pvc.Status.Capacity["storage"]; found && !storage.IsZero() {
-										logger.Debug("Virtual media %s has ready media (PVC: %s, size: %s) for VM %s/%s", mediaID, pvcName, storage.String(), namespace, name)
-										return true, nil
-									}
-								}
-								logger.Debug("Virtual media %s has bound PVC %s but no storage capacity for VM %s/%s", mediaID, pvcName, namespace, name)
-								return false, nil
-							} else {
-								logger.Debug("Virtual media %s has media but PVC %s is not bound (phase: %s) for VM %s/%s", mediaID, pvcName, pvc.Status.Phase, namespace, name)
-								return false, nil
-							}
+	if disks, found := devices["disks"].([]interface{}); found {
+		for _, disk := range disks {
+			if diskMap, ok := disk.(map[string]interface{}); ok {
+				if diskName, found := diskMap["name"].(string); found && diskName == mediaID {
+					// Check if this is a CD-ROM device
+					if cdrom, found := diskMap["cdrom"]; found && cdrom != nil {
+						if vol, ok := diskMap["volumeName"].(string); ok && vol != "" {
+							volumeRef = vol
+						} else {
+							volumeRef = diskName
 						}
+						break
 					}
 				}
 			}
 		}
 	}
 
-	logger.Debug("Virtual media %s has no inserted media for VM %s/%s", mediaID, namespace, name)
-	return false, nil
+	if volumeRef == "" {
+		logger.Debug("CD-ROM device %s not found in VM %s/%s", mediaID, namespace, name)
+		return false, nil
+	}
+
+	// Step 2: Find the corresponding volume for the CD-ROM
+	var pvcName string
+	volumes, found, err := unstructured.NestedSlice(vm.Object, "spec", "template", "spec", "volumes")
+	if err != nil || !found {
+		logger.Debug("No volumes found in VM %s/%s", namespace, name)
+		return false, nil
+	}
+
+	for _, volume := range volumes {
+		if volumeMap, ok := volume.(map[string]interface{}); ok {
+			if volumeName, found := volumeMap["name"].(string); found && volumeName == volumeRef {
+				// Step 3: Get PVC name from persistentVolumeClaim.claimName
+				if pvc, found := volumeMap["persistentVolumeClaim"].(map[string]interface{}); found {
+					if claimName, found := pvc["claimName"].(string); found {
+						pvcName = claimName
+						break
+					}
+				}
+			}
+		}
+	}
+
+	if pvcName == "" {
+		logger.Debug("No PVC found for CD-ROM volume %s in VM %s/%s", volumeRef, namespace, name)
+		return false, nil
+	}
+
+	// Step 4: Check if the PVC is bound and has non-zero size
+	pvcObj, err := c.kubernetesClient.CoreV1().PersistentVolumeClaims(namespace).Get(context.Background(), pvcName, metav1.GetOptions{})
+	if err != nil {
+		logger.Debug("PVC %s not found for VM %s/%s: %v", pvcName, namespace, name, err)
+		return false, nil
+	}
+
+	// Check if PVC is bound and has data
+	if pvcObj.Status.Phase == corev1.ClaimBound {
+		// Additional check: verify the PVC has actual data by checking if it's not empty
+		// This is important for DataVolume imports that may take time
+		if len(pvcObj.Status.Capacity) > 0 {
+			// Check if there's actual storage allocated
+			if storage, found := pvcObj.Status.Capacity["storage"]; found && !storage.IsZero() {
+				logger.Debug("Virtual media %s has ready media (PVC: %s, size: %s) for VM %s/%s", mediaID, pvcName, storage.String(), namespace, name)
+				return true, nil
+			}
+		}
+		logger.Debug("Virtual media %s has bound PVC %s but no storage capacity for VM %s/%s", mediaID, pvcName, namespace, name)
+		return false, nil
+	} else {
+		logger.Debug("Virtual media %s has media but PVC %s is not bound (phase: %s) for VM %s/%s", mediaID, pvcName, pvcObj.Status.Phase, namespace, name)
+		return false, nil
+	}
 }
 
 // downloadISO downloads an ISO file to a temporary directory
@@ -1922,7 +1961,7 @@ func (c *Client) copyISOToPVC(namespace, dataVolumeName, imageURL, isoDownloadTi
 				{
 					Name:    "copy",
 					Image:   helperImage,
-					Command: []string{"sh", "-c", fmt.Sprintf("wget --no-check-certificate -O /tmp/%s %s && dd if=/tmp/%s of=/dev/block bs=1M", isoFileName, imageURL, isoFileName)},
+					Command: []string{"sh", "-c", fmt.Sprintf("curl --fail --show-error --insecure --connect-timeout 30 --max-time 1800 --location -o /tmp/%s %s && [ -s /tmp/%s ] && dd if=/tmp/%s of=/dev/block bs=1M conv=fsync", isoFileName, imageURL, isoFileName, isoFileName)},
 					VolumeDevices: []corev1.VolumeDevice{
 						{Name: "iso-volume", DevicePath: "/dev/block"},
 					},

@@ -238,7 +238,7 @@ func setDefaults() {
 	viper.SetDefault("datavolume.allow_insecure_tls", false)
 	viper.SetDefault("datavolume.vm_update_timeout", "30s")
 	viper.SetDefault("datavolume.iso_download_timeout", "30m")
-	viper.SetDefault("datavolume.helper_image", "alpine:latest")
+	viper.SetDefault("datavolume.helper_image", "registry.access.redhat.com/ubi8/ubi-minimal:latest")
 	viper.SetDefault("system_id_convention", "legacy") // Default to legacy for backward compatibility
 }
 
