@@ -3343,3 +3343,57 @@ func TestGetVMPowerStateNilClient(t *testing.T) {
 		t.Errorf("Expected power state 'Unknown', got '%s'", powerState)
 	}
 }
+
+// TestSanitizeResourceName tests the sanitizeResourceName function
+func TestSanitizeResourceName(t *testing.T) {
+	testCases := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "short name",
+			input:    "vm",
+			expected: "vm",
+		},
+		{
+			name:     "exactly 63 characters",
+			input:    "this-is-a-resource-name-with-63-characters-aaaaaaaaaaaaaaaaaaaa",
+			expected: "this-is-a-resource-name-with-63-characters-aaaaaaaaaaaaaaaaaaaa",
+		},
+		{
+			name:     "64 characters - should be truncated",
+			input:    "this-is-a-resource-name-with-64-characters-the-last-one-is-gone-",
+			expected: "this-is-a-resource-name-with-64-characters-the-la5fg6xtruncated",
+		},
+		{
+			name:     "> 64 characters - should be truncated",
+			input:    "this-is-a-resource-name-with-more-than-64-characters-and-it-must-be-truncated",
+			expected: "this-is-a-resource-name-with-more-than-64-charact2xwg2truncated",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := sanitizeResourceName(tc.input)
+			if result != tc.expected {
+				t.Errorf("Expected '%s', got '%s'", tc.expected, result)
+			}
+
+			// Additional validation: ensure the result is never longer than 63 characters
+			if len(result) > 63 {
+				t.Errorf("Result length %d exceeds maximum allowed length of 63", len(result))
+			}
+
+			// Additional validation: ensure the result is never longer than the input
+			if len(result) > len(tc.input) {
+				t.Errorf("Result length %d is longer than input length %d", len(result), len(tc.input))
+			}
+		})
+	}
+}

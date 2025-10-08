@@ -21,10 +21,12 @@ package kubevirt
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -1740,7 +1742,7 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 		logger.Debug("DEBUG: Using CDI HTTP import approach for URL scheme %s", u.Scheme)
 		// CDI HTTP import for HTTP or valid HTTPS
 		logger.Info("Using CDI HTTP import for ISO")
-		volumeImportSourceName := fmt.Sprintf("%s-populator", dataVolumeName)
+		volumeImportSourceName := sanitizeResourceName(fmt.Sprintf("%s-populator", dataVolumeName))
 		logger.Debug("DEBUG: Generated volumeImportSourceName=%s", volumeImportSourceName)
 		volumeImportSource := &unstructured.Unstructured{
 			Object: map[string]interface{}{
@@ -2858,4 +2860,17 @@ func (c *Client) isPVCUsable(pvc *corev1.PersistentVolumeClaim) bool {
 
 	// Lost or other states are not usable
 	return false
+}
+
+// sanitizeResourceName sanitizes a resource name to ensure it is a valid Kubernetes resource name
+// It truncates the resourceName to 63 characters if it's longer that that and ensures it ends with
+// alphanumeric character by appending "truncated" string, it also avoids name collisions by using a hash of the name
+func sanitizeResourceName(resourceName string) string {
+	if len(resourceName) <= 63 {
+		return resourceName
+	}
+	hash := sha256.Sum256([]byte(resourceName))
+	shortHash := new(big.Int).SetBytes(hash[:]).Text(36)[:5]
+
+	return resourceName[:49] + shortHash + "truncated"
 }
