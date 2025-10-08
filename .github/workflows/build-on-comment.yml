@@ -1,0 +1,220 @@
+name: Build on Comment
+
+on:
+  issue_comment:
+    types: [created]
+
+env:
+  # Go configuration
+  GO_VERSION: '1.21'
+  CGO_ENABLED: '0'
+  GOOS: 'linux'
+  GOARCH: 'amd64'
+  
+  # Container registry configuration
+  REGISTRY: 'quay.io'
+  NAMESPACE: 'bjozsa-redhat'
+  IMAGE_NAME: 'kubevirt-redfish'
+
+jobs:
+  # Check if comment is from authorized maintainer
+  check-permissions:
+    if: |
+      github.event.issue.pull_request != null &&
+      (contains(github.event.comment.body, '#ready-to-test') || 
+       contains(github.event.comment.body, '#ready-to-push')) &&
+      github.event.comment.user.login != 'github-actions[bot]'
+    
+    runs-on: ubuntu-latest
+    outputs:
+      authorized: ${{ steps.check.outputs.authorized }}
+      action: ${{ steps.parse-comment.outputs.action }}
+      pr-number: ${{ steps.parse-comment.outputs.pr-number }}
+      commit-sha: ${{ steps.parse-comment.outputs.commit-sha }}
+    
+    steps:
+    - name: Parse comment
+      id: parse-comment
+      run: |
+        COMMENT="${{ github.event.comment.body }}"
+        PR_NUMBER="${{ github.event.issue.number }}"
+        COMMIT_SHA="${{ github.event.issue.pull_request.head.sha }}"
+        
+        if [[ "$COMMENT" == *"#ready-to-test"* ]]; then
+          echo "action=test" >> $GITHUB_OUTPUT
+        elif [[ "$COMMENT" == *"#ready-to-push"* ]]; then
+          echo "action=push" >> $GITHUB_OUTPUT
+        fi
+        
+        echo "pr-number=$PR_NUMBER" >> $GITHUB_OUTPUT
+        echo "commit-sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
+        
+        echo "Parsed comment: action=$ACTION, PR=$PR_NUMBER, commit=$COMMIT_SHA"
+    
+    - name: Check maintainer permissions
+      id: check
+      run: |
+        # List of authorized maintainers (GitHub usernames)
+        MAINTAINERS=("bjozsa" "v1k0d3n")
+        
+        COMMENT_USER="${{ github.event.comment.user.login }}"
+        echo "Comment from user: $COMMENT_USER"
+        
+        # Check if user is in maintainers list
+        for maintainer in "${MAINTAINERS[@]}"; do
+          if [[ "$COMMENT_USER" == "$maintainer" ]]; then
+            echo "✅ User $COMMENT_USER is authorized"
+            echo "authorized=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+        done
+        
+        echo "❌ User $COMMENT_USER is not authorized to trigger builds"
+        echo "authorized=false" >> $GITHUB_OUTPUT
+        
+        # Post a comment explaining the issue
+        gh pr comment ${{ github.event.issue.number }} --body "❌ **Build Trigger Denied**
+        
+        Only authorized maintainers can trigger builds with \`#ready-to-test\` or \`#ready-to-push\`.
+        
+        **Authorized maintainers:** ${MAINTAINERS[*]}
+        **Your username:** $COMMENT_USER"
+        
+        exit 1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Test build (no registry push)
+  test-build:
+    needs: check-permissions
+    if: needs.check-permissions.outputs.authorized == 'true' && needs.check-permissions.outputs.action == 'test'
+    
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout PR code
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ needs.check-permissions.outputs.commit-sha }}
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+        cache: true
+    
+    - name: Run tests
+      run: |
+        make test
+        make validate
+    
+    - name: Build container (test only)
+      run: |
+        # Build the container but don't push
+        docker build -t ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.check-permissions.outputs.commit-sha }} .
+        docker build -t ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:pr-${{ needs.check-permissions.outputs.pr-number }} .
+        
+        echo "✅ Test build completed successfully"
+        echo "Container tags:"
+        echo "  - ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.check-permissions.outputs.commit-sha }}"
+        echo "  - ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:pr-${{ needs.check-permissions.outputs.pr-number }}"
+    
+    - name: Post success comment
+      if: success()
+      run: |
+        gh pr comment ${{ needs.check-permissions.outputs.pr-number }} --body "✅ **Test Build Successful**
+        
+        **Commit:** \`${{ needs.check-permissions.outputs.commit-sha }}\`
+        **Container tags built:**
+        - \`${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.check-permissions.outputs.commit-sha }}\`
+        - \`${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:pr-${{ needs.check-permissions.outputs.pr-number }}\`
+        
+        **Note:** This was a test build only. Use \`#ready-to-push\` to push to registry."
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Post failure comment
+      if: failure()
+      run: |
+        gh pr comment ${{ needs.check-permissions.outputs.pr-number }} --body "❌ **Test Build Failed**
+        
+        **Commit:** \`${{ needs.check-permissions.outputs.commit-sha }}\`
+        
+        Please check the [workflow logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details."
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Full build with registry push
+  push-build:
+    needs: check-permissions
+    if: needs.check-permissions.outputs.authorized == 'true' && needs.check-permissions.outputs.action == 'push'
+    
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout PR code
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ needs.check-permissions.outputs.commit-sha }}
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+        cache: true
+    
+    - name: Run tests
+      run: |
+        make test
+        make validate
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Log in to Quay.io
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ secrets.QUAY_USERNAME }}
+        password: ${{ secrets.QUAY_PASSWORD }}
+    
+    - name: Build and push container
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        platforms: linux/amd64,linux/arm64
+        tags: |
+          ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.check-permissions.outputs.commit-sha }}
+          ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:pr-${{ needs.check-permissions.outputs.pr-number }}
+          ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        provenance: false
+        sbom: false
+        push: true
+    
+    - name: Post success comment
+      if: success()
+      run: |
+        gh pr comment ${{ needs.check-permissions.outputs.pr-number }} --body "🚀 **Build and Push Successful**
+        
+        **Commit:** \`${{ needs.check-permissions.outputs.commit-sha }}\`
+        **Container tags pushed:**
+        - \`${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.check-permissions.outputs.commit-sha }}\`
+        - \`${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:pr-${{ needs.check-permissions.outputs.pr-number }}\`
+        - \`${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:latest\`
+        
+        **Registry:** ${{ env.REGISTRY }}/${{ env.NAMESPACE }}"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Post failure comment
+      if: failure()
+      run: |
+        gh pr comment ${{ needs.check-permissions.outputs.pr-number }} --body "❌ **Build and Push Failed**
+        
+        **Commit:** \`${{ needs.check-permissions.outputs.commit-sha }}\`
+        
+        Please check the [workflow logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details."
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
