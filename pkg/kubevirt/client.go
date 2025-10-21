@@ -1513,7 +1513,9 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 
 	// Generate unique PVC name with timestamp and random suffix to avoid conflicts
 	dataVolumeName := c.generateUniquePVCName(name)
-	logger.Debug("DEBUG: Generated unique dataVolumeName=%s", dataVolumeName)
+	// Sanitize the PVC name to ensure it doesn't exceed Kubernetes 63-character limit
+	dataVolumeName = sanitizeResourceName(dataVolumeName)
+	logger.Debug("DEBUG: Generated unique dataVolumeName=%s (sanitized to %d chars)", dataVolumeName, len(dataVolumeName))
 
 	// First, create the CD-ROM device in the VM spec
 	// Use lowercase device name for KubeVirt compatibility
@@ -1927,7 +1929,9 @@ func (c *Client) copyISOToPVC(namespace, dataVolumeName, imageURL, isoDownloadTi
 	// Use timestamp to make pod name unique and avoid race conditions
 	timestamp := time.Now().Unix()
 	helperPodName := fmt.Sprintf("copy-iso-%s-%d", dataVolumeName, timestamp)
-	logger.Debug("DEBUG: Generated unique helper pod name=%s", helperPodName)
+	// Sanitize the pod name to ensure it doesn't exceed Kubernetes 63-character limit
+	helperPodName = sanitizeResourceName(helperPodName)
+	logger.Debug("DEBUG: Generated unique helper pod name=%s (sanitized to %d chars)", helperPodName, len(helperPodName))
 
 	// Check if helper pod already exists before creating
 	existingPod, err := c.kubernetesClient.CoreV1().Pods(namespace).Get(context.Background(), helperPodName, metav1.GetOptions{})
