@@ -91,10 +91,10 @@ spec:
       volumes:
         {{- if .config }}
         - name: {{ .config.name }}
-          {{- toYaml .config | nindent 10 }}
+          {{- toYaml (omit .config "name") | nindent 10 }}
         {{- end }}
         {{- if .temp }}
         - name: {{ .temp.name }}
-          {{- toYaml .temp | nindent 10 }}
+          {{- toYaml (omit .temp "name") | nindent 10 }}
         {{- end }}
       {{- end }} 
