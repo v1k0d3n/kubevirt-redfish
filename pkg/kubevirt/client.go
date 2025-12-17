@@ -1210,8 +1210,9 @@ func (c *Client) GetVMBootOptions(namespace, name string) (map[string]interface{
 	return bootOptions, nil
 }
 
-// SetVMBootOptions sets boot options of a VirtualMachine
-func (c *Client) SetVMBootOptions(namespace, name string, options map[string]interface{}) error {
+// RecordVMBootOptionsAsAnnotations stores the boot options of a VirtualMachine
+// This is needed to support Once and Next boot logic in the future.
+func (c *Client) RecordVMBootOptionsAsAnnotations(namespace, name string, options map[string]interface{}) error {
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 
@@ -2297,7 +2298,9 @@ func (c *Client) IsDataVolumeReady(namespace, name string) (bool, error) {
 	return false, nil
 }
 
-// SetBootOrder sets the boot order for a VM to prioritize CD-ROM when boot target is CD
+// SetBootOrder sets the boot order for a VM to prioritize the selected device.
+// CD-ROM when boot target is CD, but this also keeps disk as the backup device so media ejection is handled
+// The first disk when boot target is Hdd
 func (c *Client) SetBootOrder(namespace, name, bootTarget string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
@@ -2313,36 +2316,13 @@ func (c *Client) SetBootOrder(namespace, name, bootTarget string) error {
 	// Update VM with boot order configuration
 	vmCopy := vm.DeepCopy()
 
-	// Get current devices
-	devices, found, err := unstructured.NestedMap(vmCopy.Object, "spec", "template", "spec", "domain", "devices")
-	if err == nil && found {
-		// Update disk boot order
-		if disks, found := devices["disks"].([]interface{}); found {
-			for i, disk := range disks {
-				if diskMap, ok := disk.(map[string]interface{}); ok {
-					if diskName, found := diskMap["name"].(string); found {
-						if bootTarget == "Cd" && diskName == "cdrom0" {
-							// Set CD-ROM as first boot device
-							diskMap["bootOrder"] = int64(1)
-							logger.Info("Set CD-ROM %s as first boot device", diskName)
-						} else if diskName == "disk1" {
-							// Set main disk as second boot device
-							diskMap["bootOrder"] = int64(2)
-							logger.Info("Set disk %s as second boot device", diskName)
-						}
-					}
-				}
-				// Update the disk in the slice
-				disks[i] = disk
-			}
-			devices["disks"] = disks
-		}
-
-		// Update devices in VM
-		err = unstructured.SetNestedMap(vmCopy.Object, devices, "spec", "template", "spec", "domain", "devices")
-		if err != nil {
-			return fmt.Errorf("failed to update VM devices: %w", err)
-		}
+	// Collect current volumes and detect their type
+	// This is needed, because the device list does not provide enough
+	// information about disk type and there are disks that are not bootable
+	// like cloud init.
+	err = c.modifyVmBootOrder(vmCopy, bootTarget)
+	if err != nil {
+		return err
 	}
 
 	// Update VM
@@ -2358,6 +2338,90 @@ func (c *Client) SetBootOrder(namespace, name, bootTarget string) error {
 	}
 
 	logger.Info("Successfully set boot order to %s for VM %s/%s", bootTarget, namespace, name)
+	return nil
+}
+
+func (*Client) modifyVmBootOrder(vmCopy *unstructured.Unstructured, bootTarget string) error {
+	const (
+		HDD   = "hdd"
+		CDROM = "cd"
+	)
+
+	volumeTypes := map[string]string{}
+	cdsFound := 0
+	if volumesList, found, err := unstructured.NestedSlice(vmCopy.Object, "spec", "template", "spec", "volumes"); err == nil && found {
+		// Collect current boot devices
+
+		for _, volumeEntry := range volumesList {
+			if volume, found := volumeEntry.(map[string]interface{}); found {
+				volumeName, found := volume["name"].(string)
+				if !found {
+					continue
+				}
+
+				// Heuristic for catching autoimported cdroms
+				if strings.HasPrefix(volumeName, "cdrom") {
+					cdsFound += 1
+					volumeTypes[volumeName] = CDROM
+					continue
+				}
+
+				// Two basic disk types are recognized
+				// dataVolume and containerDisk
+				if _, ok := volume["dataVolume"]; ok {
+					volumeTypes[volumeName] = HDD
+				}
+				if _, ok := volume["containerDisk"]; ok {
+					volumeTypes[volumeName] = HDD
+				}
+			}
+		}
+	}
+
+	// Get current devices
+	devices, found, err := unstructured.NestedMap(vmCopy.Object, "spec", "template", "spec", "domain", "devices")
+	if err == nil && found {
+		// Update disk boot order
+		if disks, found := devices["disks"].([]interface{}); found {
+			// Collect current boot devices
+			nextBootOrderPrimary := 1
+			nextBootOrderSecondary := 1
+			for i, disk := range disks {
+				if diskMap, ok := disk.(map[string]interface{}); ok {
+					if diskName, found := diskMap["name"].(string); found {
+						if volType, found := volumeTypes[diskName]; found && volType == CDROM && bootTarget == "Cd" {
+							// Set CD-ROMs as primary boot devices
+							diskMap["bootOrder"] = int64(nextBootOrderPrimary)
+							logger.Info("Set CD-ROM %s as primary boot device (order: %d)", diskName, nextBootOrderPrimary)
+							nextBootOrderPrimary += 1
+						} else if volType, found := volumeTypes[diskName]; found && volType == HDD && bootTarget == "Hdd" {
+							// Set disk as primary boot device
+							diskMap["bootOrder"] = int64(nextBootOrderPrimary)
+							logger.Info("Set disk %s as primary boot device (order: %d)", diskName, nextBootOrderPrimary)
+							nextBootOrderPrimary += 1
+						} else if volType, found := volumeTypes[diskName]; found && volType == HDD && bootTarget == "Cd" {
+							// Set main disk as secondary boot device
+							diskMap["bootOrder"] = int64(cdsFound + nextBootOrderSecondary)
+							logger.Info("Set disk %s as secondary boot device (order: %d)", diskName, cdsFound+nextBootOrderSecondary)
+							nextBootOrderSecondary += 1
+						} else {
+							// All other devices should have their boot order removed
+							delete(diskMap, "bootOrder")
+						}
+					}
+				}
+				// Update the disk in the slice
+				disks[i] = disk
+			}
+			devices["disks"] = disks
+		}
+
+		// Update devices in VM
+		err = unstructured.SetNestedMap(vmCopy.Object, devices, "spec", "template", "spec", "domain", "devices")
+		if err != nil {
+			return fmt.Errorf("failed to update VM devices: %w", err)
+		}
+	}
 	return nil
 }
 

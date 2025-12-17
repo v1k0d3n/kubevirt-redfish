@@ -630,7 +630,7 @@ func TestClient_SetVMBootOptions(t *testing.T) {
 	}
 
 	// Test boot options setting failure - should return error, not panic
-	err := client.SetVMBootOptions("test-namespace", "test-vm", options)
+	err := client.RecordVMBootOptionsAsAnnotations("test-namespace", "test-vm", options)
 	if err == nil {
 		t.Error("Expected error when dynamic client is nil")
 	}
@@ -2469,7 +2469,7 @@ func TestSetVMBootOptionsReal(t *testing.T) {
 	}
 
 	// Test that SetVMBootOptions returns error when no client is available
-	err := client.SetVMBootOptions("test-namespace", "test-vm", map[string]interface{}{
+	err := client.RecordVMBootOptionsAsAnnotations("test-namespace", "test-vm", map[string]interface{}{
 		"BootSourceOverrideEnabled": "Once",
 		"BootSourceOverrideTarget":  "Pxe",
 	})
@@ -2590,6 +2590,15 @@ func TestSetBootOrderLogic(t *testing.T) {
 									},
 								},
 							},
+							"volumes": []interface{}{
+								map[string]interface{}{
+									"name": "cdrom0",
+								},
+								map[string]interface{}{
+									"name":       "disk1",
+									"dataVolume": map[string]interface{}{},
+								},
+							},
 						},
 					},
 				},
@@ -2597,6 +2606,89 @@ func TestSetBootOrderLogic(t *testing.T) {
 			expected: map[string]interface{}{
 				"cdrom0": int64(1),
 				"disk1":  int64(2),
+			},
+		},
+		{
+			name:       "Set CD-ROM as first boot device when boot 1 taken",
+			bootTarget: "Cd",
+			vmSpec: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"template": map[string]interface{}{
+						"spec": map[string]interface{}{
+							"domain": map[string]interface{}{
+								"devices": map[string]interface{}{
+									"disks": []interface{}{
+										map[string]interface{}{
+											"name": "cdrom0",
+										},
+										map[string]interface{}{
+											"name":      "disk1",
+											"bootOrder": int64(1),
+										},
+									},
+								},
+							},
+							"volumes": []interface{}{
+								map[string]interface{}{
+									"name": "cdrom0",
+								},
+								map[string]interface{}{
+									"name":       "disk1",
+									"dataVolume": map[string]interface{}{},
+								},
+							},
+						},
+					},
+				},
+			},
+			expected: map[string]interface{}{
+				"cdrom0": int64(1),
+				"disk1":  int64(2),
+			},
+		},
+		{
+			name:       "Set CD-ROM as first boot device, ignore cloudInit",
+			bootTarget: "Cd",
+			vmSpec: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"template": map[string]interface{}{
+						"spec": map[string]interface{}{
+							"domain": map[string]interface{}{
+								"devices": map[string]interface{}{
+									"disks": []interface{}{
+										map[string]interface{}{
+											"name": "cdrom0",
+										},
+										map[string]interface{}{
+											"name": "disk1",
+										},
+										map[string]interface{}{
+											"name": "cloudinitdisk",
+										},
+									},
+								},
+							},
+							"volumes": []interface{}{
+								map[string]interface{}{
+									"name": "cdrom0",
+								},
+								map[string]interface{}{
+									"name":       "disk1",
+									"dataVolume": map[string]interface{}{},
+								},
+								map[string]interface{}{
+									"name":             "cloudinitdisk",
+									"cloudInitNoCloud": map[string]interface{}{},
+								},
+							},
+						},
+					},
+				},
+			},
+			expected: map[string]interface{}{
+				"cdrom0":        int64(1),
+				"disk1":         int64(2),
+				"cloudinitdisk": nil,
 			},
 		},
 		{
@@ -2618,16 +2710,72 @@ func TestSetBootOrderLogic(t *testing.T) {
 									},
 								},
 							},
+							"volumes": []interface{}{
+								map[string]interface{}{
+									"name": "cdrom0",
+								},
+								map[string]interface{}{
+									"name":       "disk1",
+									"dataVolume": map[string]interface{}{},
+								},
+							},
 						},
 					},
 				},
 			},
 			expected: map[string]interface{}{
 				"cdrom0": nil,
-				"disk1":  int64(2),
+				"disk1":  int64(1),
+			},
+		},
+		{
+			name:       "Set disk as first boot device ignore cloud init",
+			bootTarget: "Hdd",
+			vmSpec: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"template": map[string]interface{}{
+						"spec": map[string]interface{}{
+							"domain": map[string]interface{}{
+								"devices": map[string]interface{}{
+									"disks": []interface{}{
+										map[string]interface{}{
+											"name": "cdrom0",
+										},
+										map[string]interface{}{
+											"name": "disk1",
+										},
+										map[string]interface{}{
+											"name": "cloudinitdisk",
+										},
+									},
+								},
+							},
+							"volumes": []interface{}{
+								map[string]interface{}{
+									"name": "cdrom0",
+								},
+								map[string]interface{}{
+									"name":       "disk1",
+									"dataVolume": map[string]interface{}{},
+								},
+								map[string]interface{}{
+									"name":             "cloudinitdisk",
+									"cloudInitNoCloud": map[string]interface{}{},
+								},
+							},
+						},
+					},
+				},
+			},
+			expected: map[string]interface{}{
+				"cdrom0":        nil,
+				"disk1":         int64(1),
+				"cloudinitdisk": nil,
 			},
 		},
 	}
+
+	client := Client{}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2636,33 +2784,20 @@ func TestSetBootOrderLogic(t *testing.T) {
 			vm.SetUnstructuredContent(tc.vmSpec)
 
 			// Simulate the boot order logic
-			devices, found, err := unstructured.NestedMap(vm.Object, "spec", "template", "spec", "domain", "devices")
-			if err == nil && found {
-				if disks, found := devices["disks"].([]interface{}); found {
-					for i, disk := range disks {
-						if diskMap, ok := disk.(map[string]interface{}); ok {
-							if diskName, found := diskMap["name"].(string); found {
-								if tc.bootTarget == "Cd" && diskName == "cdrom0" {
-									// Set CD-ROM as first boot device
-									diskMap["bootOrder"] = int64(1)
-								} else if diskName == "disk1" {
-									// Set main disk as second boot device
-									diskMap["bootOrder"] = int64(2)
-								}
-							}
-						}
-						// Update the disk in the slice
-						disks[i] = disk
-					}
-					devices["disks"] = disks
-				}
-			}
+			client.modifyVmBootOrder(vm, tc.bootTarget)
 
 			// Verify the results
+			devices, found, err := unstructured.NestedMap(vm.Object, "spec", "template", "spec", "domain", "devices")
+			if !found || err != nil {
+				t.Errorf("modified VM has no devices: found:%v err:%v", found, err)
+			}
+
+			testedDisks := map[string]bool{}
 			if disks, found := devices["disks"].([]interface{}); found {
 				for _, disk := range disks {
 					if diskMap, ok := disk.(map[string]interface{}); ok {
 						if diskName, found := diskMap["name"].(string); found {
+							testedDisks[diskName] = true
 							if expectedOrder, exists := tc.expected[diskName]; exists {
 								if actualOrder, found := diskMap["bootOrder"]; found {
 									if actualOrder != expectedOrder {
@@ -2674,6 +2809,12 @@ func TestSetBootOrderLogic(t *testing.T) {
 							}
 						}
 					}
+				}
+			}
+
+			for name := range tc.expected {
+				if _, ok := testedDisks[name]; !ok {
+					t.Errorf("Disk %s boot order was not checked. It was probably missing.", name)
 				}
 			}
 		})
