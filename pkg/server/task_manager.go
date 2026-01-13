@@ -490,7 +490,7 @@ func (tm *TaskManager) jobDispatcher() {
 					logger.Debug("DEBUG: Job dispatcher found available worker %d for job %s", worker.ID, job.ID)
 					select {
 					case worker.jobChan <- job:
-						logger.Info("DEBUG: Job dispatcher successfully assigned job %s to worker %d", job.ID, worker.ID)
+						logger.Debug("DEBUG: Job dispatcher successfully assigned job %s to worker %d", job.ID, worker.ID)
 						tm.updateQueueStats(-1)
 						jobsDispatched++
 						// Small delay to allow other workers to become available

@@ -307,6 +307,10 @@ func validateServerConfig(server *ServerConfig) error {
 		return errors.NewValidationError("Invalid server port", fmt.Sprintf("server.port must be between 1 and 65535, got %d", server.Port))
 	}
 
+	if server.WorkerCount < 1 || server.WorkerCount > 100 {
+		return errors.NewValidationError("Invalid worker count", fmt.Sprintf("server.worker_count must be between 1 and 100 (10 is default), got %d", server.WorkerCount))
+	}
+
 	if server.TLS.Enabled {
 		if server.TLS.CertFile == "" {
 			return errors.NewValidationError("TLS certificate file is required when TLS is enabled", "server.tls.cert_file cannot be empty when server.tls.enabled is true")
