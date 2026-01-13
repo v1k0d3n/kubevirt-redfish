@@ -75,9 +75,11 @@ type TaskManager struct {
 	priorityQueue *PriorityQueue
 
 	// Worker pool
-	workers     []*Worker
-	workerCount int
-	workerMutex sync.RWMutex
+	workers         []*Worker
+	workerCount     int
+	workerMutex     sync.RWMutex
+	lastWorkerIndex int // For round-robin distribution
+	lastWorkerMutex sync.Mutex
 
 	// KubeVirt client for actual operations
 	kubevirtClient *kubevirt.Client
@@ -454,8 +456,12 @@ func (tm *TaskManager) startWorkers() {
 }
 
 // jobDispatcher dispatches jobs from the priority queue to available workers
+// It tries to distribute jobs evenly across all workers using round-robin
 func (tm *TaskManager) jobDispatcher() {
 	logger.Debug("DEBUG: Starting job dispatcher")
+	ticker := time.NewTicker(50 * time.Millisecond) // Check for jobs every 50ms
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-tm.ctx.Done():
@@ -464,51 +470,81 @@ func (tm *TaskManager) jobDispatcher() {
 		case <-tm.stopChan:
 			logger.Debug("DEBUG: Job dispatcher stop signal received, stopping")
 			return
-		default:
-			// Get next job from priority queue
-			job := tm.priorityQueue.Pop()
-			if job == nil {
-				time.Sleep(100 * time.Millisecond)
-				continue
-			}
+		case <-ticker.C:
+			// Try to dispatch multiple jobs per tick to distribute load better
+			jobsDispatched := 0
+			maxJobsPerTick := 5 // Limit jobs per tick to prevent one worker from getting all jobs
 
-			logger.Debug("DEBUG: Job dispatcher popped job %s (task %s) from queue", job.ID, job.TaskID)
-
-			// Find available worker
-			worker := tm.getAvailableWorker()
-			if worker != nil {
-				logger.Debug("DEBUG: Job dispatcher found available worker %d for job %s", worker.ID, job.ID)
-				select {
-				case worker.jobChan <- job:
-					logger.Debug("DEBUG: Job dispatcher successfully assigned job %s to worker %d", job.ID, worker.ID)
-					tm.updateQueueStats(-1)
-				default:
-					// Worker is busy, put job back in queue
-					logger.Debug("DEBUG: Job dispatcher worker %d is busy, putting job %s back in queue", worker.ID, job.ID)
-					tm.priorityQueue.Push(job)
-					time.Sleep(50 * time.Millisecond)
+			for jobsDispatched < maxJobsPerTick {
+				// Get next job from priority queue
+				job := tm.priorityQueue.Pop()
+				if job == nil {
+					break // No more jobs in queue
 				}
-			} else {
-				// No available workers, put job back in queue
-				logger.Debug("DEBUG: Job dispatcher no available workers, putting job %s back in queue", job.ID)
-				tm.priorityQueue.Push(job)
-				time.Sleep(100 * time.Millisecond)
+
+				logger.Debug("DEBUG: Job dispatcher popped job %s (task %s) from queue", job.ID, job.TaskID)
+
+				// Find available worker using round-robin
+				worker := tm.getAvailableWorker()
+				if worker != nil {
+					logger.Debug("DEBUG: Job dispatcher found available worker %d for job %s", worker.ID, job.ID)
+					select {
+					case worker.jobChan <- job:
+						logger.Info("DEBUG: Job dispatcher successfully assigned job %s to worker %d", job.ID, worker.ID)
+						tm.updateQueueStats(-1)
+						jobsDispatched++
+						// Small delay to allow other workers to become available
+						time.Sleep(10 * time.Millisecond)
+					default:
+						// Worker channel is full, put job back in queue
+						logger.Debug("DEBUG: Job dispatcher worker %d channel is full, putting job %s back in queue", worker.ID, job.ID)
+						tm.priorityQueue.Push(job)
+						break // Try again next tick
+					}
+				} else {
+					// No available workers, put job back in queue
+					logger.Debug("DEBUG: Job dispatcher no available workers, putting job %s back in queue", job.ID)
+					tm.priorityQueue.Push(job)
+					break // All workers busy, wait for next tick
+				}
 			}
 		}
 	}
 }
 
-// getAvailableWorker returns an available worker or nil if all are busy
+// getAvailableWorker returns an available worker using round-robin distribution
+// This ensures jobs are distributed evenly across all workers instead of always
+// assigning to the first available worker
 func (tm *TaskManager) getAvailableWorker() *Worker {
 	tm.workerMutex.RLock()
 	defer tm.workerMutex.RUnlock()
 
-	for _, worker := range tm.workers {
+	if len(tm.workers) == 0 {
+		return nil
+	}
+
+	// Use round-robin: start from the last assigned worker index
+	tm.lastWorkerMutex.Lock()
+	startIndex := tm.lastWorkerIndex
+	tm.lastWorkerMutex.Unlock()
+
+	// Try all workers starting from the last assigned one (round-robin)
+	for i := 0; i < len(tm.workers); i++ {
+		index := (startIndex + i) % len(tm.workers)
+		worker := tm.workers[index]
+
 		// Check if worker's job channel has capacity
 		if len(worker.jobChan) < cap(worker.jobChan) {
+			// Update last assigned index for next round-robin
+			tm.lastWorkerMutex.Lock()
+			tm.lastWorkerIndex = (index + 1) % len(tm.workers)
+			tm.lastWorkerMutex.Unlock()
+
+			logger.Debug("DEBUG: Selected worker %d for round-robin distribution (started from index %d)", worker.ID, startIndex)
 			return worker
 		}
 	}
+
 	return nil
 }
 

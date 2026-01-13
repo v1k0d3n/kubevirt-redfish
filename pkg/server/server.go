@@ -129,7 +129,11 @@ func NewServer(config *config.Config, kubevirtClient *kubevirt.Client) *Server {
 	// Initialize background components only if not in test mode
 	if !config.Server.TestMode {
 		// Initialize enhanced task manager
-		taskManager = NewTaskManager(4, kubevirtClient) // 4 workers for background processing
+		workerCount := config.Server.WorkerCount
+		if workerCount <= 0 {
+			workerCount = 10 // Default to 10 workers if not configured
+		}
+		taskManager = NewTaskManager(workerCount, kubevirtClient)
 
 		// Initialize job scheduler
 		jobScheduler = NewJobScheduler()

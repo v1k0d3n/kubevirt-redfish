@@ -81,10 +81,11 @@ type Config struct {
 // ServerConfig holds HTTP server configuration including host, port, and TLS settings.
 // The server configuration determines how the Redfish API server listens for requests.
 type ServerConfig struct {
-	Host     string    `mapstructure:"host"`
-	Port     int       `mapstructure:"port"`
-	TLS      TLSConfig `mapstructure:"tls"`
-	TestMode bool      `mapstructure:"test_mode"` // Disables background processes for testing
+	Host        string    `mapstructure:"host"`
+	Port        int       `mapstructure:"port"`
+	TLS         TLSConfig `mapstructure:"tls"`
+	TestMode    bool      `mapstructure:"test_mode"`    // Disables background processes for testing
+	WorkerCount int       `mapstructure:"worker_count"` // Number of background workers for parallel task processing
 }
 
 // TLSConfig holds TLS configuration for secure HTTPS connections.
@@ -231,6 +232,7 @@ func setDefaults() {
 	viper.SetDefault("server.host", "0.0.0.0")
 	viper.SetDefault("server.port", 8443)
 	viper.SetDefault("server.tls.enabled", true)
+	viper.SetDefault("server.worker_count", 10) // Default to 10 workers for parallel ISO downloads
 	viper.SetDefault("kubevirt.api_version", "v1")
 	viper.SetDefault("kubevirt.timeout", 30)
 	viper.SetDefault("kubevirt.allow_insecure_tls", false)
