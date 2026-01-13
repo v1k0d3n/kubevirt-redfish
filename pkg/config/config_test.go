@@ -38,7 +38,8 @@ server:
   port: 8443
   tls:
     enabled: false
-
+  worker_count: 10
+  
 chassis:
   - name: "test-cluster"
     namespace: "test-namespace"
@@ -92,6 +93,11 @@ kubevirt:
 	}
 	if config.Auth.Users[0].Username != "testuser" {
 		t.Errorf("Expected username testuser, got %s", config.Auth.Users[0].Username)
+	}
+
+	// Verify worker count
+	if config.Server.WorkerCount != 10 {
+		t.Errorf("Expected worker count 10, got %d", config.Server.WorkerCount)
 	}
 
 	// Verify KubeVirt config
