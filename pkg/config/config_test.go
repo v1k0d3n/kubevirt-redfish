@@ -222,6 +222,7 @@ func TestValidateConfig(t *testing.T) {
 						CertFile: "",
 						KeyFile:  "",
 					},
+					WorkerCount: 10,
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -258,11 +259,54 @@ func TestValidateConfig(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "invalid worker count",
+			config: &Config{
+				Server: ServerConfig{
+					Host: "0.0.0.0",
+					Port: 8443,
+					TLS: TLSConfig{
+						Enabled:  false,
+						CertFile: "",
+						KeyFile:  "",
+					},
+					// invalid worker count (0 or > 100)
+					WorkerCount: 0,
+				},
+				Chassis: []ChassisConfig{
+					{
+						Name:           "test-chassis",
+						Namespace:      "test-namespace",
+						ServiceAccount: "test-sa",
+					},
+				},
+				Auth: AuthConfig{
+					Users: []UserConfig{
+						{
+							Username: "admin",
+							Password: "admin123",
+							Chassis:  []string{"test-chassis"},
+						},
+					},
+				},
+				KubeVirt: KubeVirtConfig{
+					APIVersion: "v1",
+					Timeout:    30,
+				},
+				DataVolume: DataVolumeConfig{
+					StorageSize: "10Gi",
+				},
+				SystemIDConvention: "legacy",
+			},
+			wantErr: true,
+			errType: errors.ErrorTypeValidation,
+		},
+		{
 			name: "missing server host",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "",
-					Port: 8443,
+					Host:        "",
+					Port:        8443,
+					WorkerCount: 10,
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -296,8 +340,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "invalid server port",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 70000, // Invalid port
+					Host:        "0.0.0.0",
+					Port:        70000, // Invalid port
+					WorkerCount: 10,
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -331,8 +376,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "TLS enabled without certificate files",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: 10,
 					TLS: TLSConfig{
 						Enabled:  true,
 						CertFile: "",
@@ -371,8 +417,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "no chassis configuration",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: 10,
 				},
 				Chassis: []ChassisConfig{},
 				Auth: AuthConfig{
@@ -400,8 +447,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "invalid chassis name format",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: 10,
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -435,8 +483,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "invalid namespace format",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: 10,
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -469,8 +518,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "no users configuration",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: 10,
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -497,8 +547,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "user with weak password",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: 10,
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -531,8 +582,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "user with access to non-existent chassis",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: 10,
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -565,8 +617,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "duplicate chassis names",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: 10,
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -604,8 +657,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "duplicate usernames",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: 10,
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -643,8 +697,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "invalid KubeVirt API version",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: 10,
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -677,8 +732,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "invalid KubeVirt timeout",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: 10,
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -711,8 +767,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "invalid storage size format",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: 10,
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -745,8 +802,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "invalid timeout format",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: 10,
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -814,8 +872,9 @@ func TestEnvironmentVariableOverrides(t *testing.T) {
 	// Create a minimal valid config
 	config := &Config{
 		Server: ServerConfig{
-			Host: "0.0.0.0", // This should be overridden
-			Port: 8443,      // This should be overridden
+			Host:        "0.0.0.0", // This should be overridden
+			Port:        8443,      // This should be overridden
+			WorkerCount: 10,        // Valid worker count
 		},
 		Chassis: []ChassisConfig{
 			{

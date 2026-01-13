@@ -475,6 +475,7 @@ func (tm *TaskManager) jobDispatcher() {
 			jobsDispatched := 0
 			maxJobsPerTick := 5 // Limit jobs per tick to prevent one worker from getting all jobs
 
+		dispatchLoop:
 			for jobsDispatched < maxJobsPerTick {
 				// Get next job from priority queue
 				job := tm.priorityQueue.Pop()
@@ -499,13 +500,13 @@ func (tm *TaskManager) jobDispatcher() {
 						// Worker channel is full, put job back in queue
 						logger.Debug("DEBUG: Job dispatcher worker %d channel is full, putting job %s back in queue", worker.ID, job.ID)
 						tm.priorityQueue.Push(job)
-						break // Try again next tick
+						break dispatchLoop // Exit for loop, try again next tick
 					}
 				} else {
 					// No available workers, put job back in queue
 					logger.Debug("DEBUG: Job dispatcher no available workers, putting job %s back in queue", job.ID)
 					tm.priorityQueue.Push(job)
-					break // All workers busy, wait for next tick
+					break dispatchLoop // Exit for loop, all workers busy
 				}
 			}
 		}
