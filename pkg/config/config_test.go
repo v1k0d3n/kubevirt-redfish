@@ -20,8 +20,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/v1k0d3n/kubevirt-redfish/pkg/errors"
@@ -32,13 +34,16 @@ func TestLoadConfig(t *testing.T) {
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "test-config.yaml")
 
-	configContent := `
+	// Use runtime.NumCPU() to ensure worker_count is valid on any machine
+	numCPU := runtime.NumCPU()
+
+	configContent := fmt.Sprintf(`
 server:
   host: "127.0.0.1"
   port: 8443
   tls:
     enabled: false
-  worker_count: 10
+  worker_count: %d
   
 chassis:
   - name: "test-cluster"
@@ -55,7 +60,7 @@ authentication:
 kubevirt:
   api_version: "v1"
   timeout: 30
-`
+`, numCPU)
 
 	err := os.WriteFile(configPath, []byte(configContent), 0600)
 	if err != nil {
@@ -96,8 +101,8 @@ kubevirt:
 	}
 
 	// Verify worker count
-	if config.Server.WorkerCount != 10 {
-		t.Errorf("Expected worker count 10, got %d", config.Server.WorkerCount)
+	if config.Server.WorkerCount != numCPU {
+		t.Errorf("Expected worker count %d, got %d", numCPU, config.Server.WorkerCount)
 	}
 
 	// Verify KubeVirt config
@@ -222,7 +227,7 @@ func TestValidateConfig(t *testing.T) {
 						CertFile: "",
 						KeyFile:  "",
 					},
-					WorkerCount: 10,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -269,7 +274,7 @@ func TestValidateConfig(t *testing.T) {
 						CertFile: "",
 						KeyFile:  "",
 					},
-					// invalid worker count (0 or > 100)
+					// invalid worker count (0 or > runtime.NumCPU())
 					WorkerCount: 0,
 				},
 				Chassis: []ChassisConfig{
@@ -306,7 +311,7 @@ func TestValidateConfig(t *testing.T) {
 				Server: ServerConfig{
 					Host:        "",
 					Port:        8443,
-					WorkerCount: 10,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -342,7 +347,7 @@ func TestValidateConfig(t *testing.T) {
 				Server: ServerConfig{
 					Host:        "0.0.0.0",
 					Port:        70000, // Invalid port
-					WorkerCount: 10,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -378,7 +383,7 @@ func TestValidateConfig(t *testing.T) {
 				Server: ServerConfig{
 					Host:        "0.0.0.0",
 					Port:        8443,
-					WorkerCount: 10,
+					WorkerCount: runtime.NumCPU(),
 					TLS: TLSConfig{
 						Enabled:  true,
 						CertFile: "",
@@ -419,7 +424,7 @@ func TestValidateConfig(t *testing.T) {
 				Server: ServerConfig{
 					Host:        "0.0.0.0",
 					Port:        8443,
-					WorkerCount: 10,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{},
 				Auth: AuthConfig{
@@ -449,7 +454,7 @@ func TestValidateConfig(t *testing.T) {
 				Server: ServerConfig{
 					Host:        "0.0.0.0",
 					Port:        8443,
-					WorkerCount: 10,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -485,7 +490,7 @@ func TestValidateConfig(t *testing.T) {
 				Server: ServerConfig{
 					Host:        "0.0.0.0",
 					Port:        8443,
-					WorkerCount: 10,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -520,7 +525,7 @@ func TestValidateConfig(t *testing.T) {
 				Server: ServerConfig{
 					Host:        "0.0.0.0",
 					Port:        8443,
-					WorkerCount: 10,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -549,7 +554,7 @@ func TestValidateConfig(t *testing.T) {
 				Server: ServerConfig{
 					Host:        "0.0.0.0",
 					Port:        8443,
-					WorkerCount: 10,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -584,7 +589,7 @@ func TestValidateConfig(t *testing.T) {
 				Server: ServerConfig{
 					Host:        "0.0.0.0",
 					Port:        8443,
-					WorkerCount: 10,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -619,7 +624,7 @@ func TestValidateConfig(t *testing.T) {
 				Server: ServerConfig{
 					Host:        "0.0.0.0",
 					Port:        8443,
-					WorkerCount: 10,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -659,7 +664,7 @@ func TestValidateConfig(t *testing.T) {
 				Server: ServerConfig{
 					Host:        "0.0.0.0",
 					Port:        8443,
-					WorkerCount: 10,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -699,7 +704,7 @@ func TestValidateConfig(t *testing.T) {
 				Server: ServerConfig{
 					Host:        "0.0.0.0",
 					Port:        8443,
-					WorkerCount: 10,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -734,7 +739,7 @@ func TestValidateConfig(t *testing.T) {
 				Server: ServerConfig{
 					Host:        "0.0.0.0",
 					Port:        8443,
-					WorkerCount: 10,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -769,7 +774,7 @@ func TestValidateConfig(t *testing.T) {
 				Server: ServerConfig{
 					Host:        "0.0.0.0",
 					Port:        8443,
-					WorkerCount: 10,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -804,7 +809,7 @@ func TestValidateConfig(t *testing.T) {
 				Server: ServerConfig{
 					Host:        "0.0.0.0",
 					Port:        8443,
-					WorkerCount: 10,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -872,9 +877,9 @@ func TestEnvironmentVariableOverrides(t *testing.T) {
 	// Create a minimal valid config
 	config := &Config{
 		Server: ServerConfig{
-			Host:        "0.0.0.0", // This should be overridden
-			Port:        8443,      // This should be overridden
-			WorkerCount: 10,        // Valid worker count
+			Host:        "0.0.0.0",        // This should be overridden
+			Port:        8443,             // This should be overridden
+			WorkerCount: runtime.NumCPU(), // Valid worker count
 		},
 		Chassis: []ChassisConfig{
 			{

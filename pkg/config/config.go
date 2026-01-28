@@ -55,6 +55,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -174,6 +175,8 @@ type DataVolumeConfig struct {
 func LoadConfig(configPath string) (*Config, error) {
 	logger.Info("Loading configuration...")
 
+	// Reset viper to ensure clean state (important for tests and reloads)
+	viper.Reset()
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
 
@@ -232,7 +235,12 @@ func setDefaults() {
 	viper.SetDefault("server.host", "0.0.0.0")
 	viper.SetDefault("server.port", 8443)
 	viper.SetDefault("server.tls.enabled", true)
-	viper.SetDefault("server.worker_count", 10) // Default to 10 workers for parallel ISO downloads
+	defaultWorkers := 10 // Default to 10 workers for parallel ISO downloads
+	// If the number of CPUs is less than the default, use the number of CPUs
+	if cpuCount := runtime.NumCPU(); cpuCount < defaultWorkers {
+		defaultWorkers = cpuCount
+	}
+	viper.SetDefault("server.worker_count", defaultWorkers) // Default capped by CPU count
 	viper.SetDefault("kubevirt.api_version", "v1")
 	viper.SetDefault("kubevirt.timeout", 30)
 	viper.SetDefault("kubevirt.allow_insecure_tls", false)
@@ -307,8 +315,10 @@ func validateServerConfig(server *ServerConfig) error {
 		return errors.NewValidationError("Invalid server port", fmt.Sprintf("server.port must be between 1 and 65535, got %d", server.Port))
 	}
 
-	if server.WorkerCount < 1 || server.WorkerCount > 100 {
-		return errors.NewValidationError("Invalid worker count", fmt.Sprintf("server.worker_count must be between 1 and 100 (10 is default), got %d", server.WorkerCount))
+	// Use number of CPUs as the maximum number of workers to avoid overwhelming the system
+	maxWorkers := runtime.NumCPU()
+	if server.WorkerCount < 1 || server.WorkerCount > maxWorkers {
+		return errors.NewValidationError("Invalid worker count", fmt.Sprintf("server.worker_count must be between 1 and %d (number of CPUs), got %d", maxWorkers, server.WorkerCount))
 	}
 
 	if server.TLS.Enabled {
