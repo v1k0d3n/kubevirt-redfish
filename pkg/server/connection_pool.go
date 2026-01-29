@@ -175,12 +175,13 @@ func (hcp *HTTPClientPool) performCleanup() {
 	poolSize := len(hcp.clients)
 	if poolSize > hcp.maxSize/2 {
 		excess := poolSize - hcp.maxSize/2
+	cleanupLoop:
 		for i := 0; i < excess; i++ {
 			select {
 			case <-hcp.clients:
 				hcp.updateStats(0, 0, 1) // Client closed during cleanup
 			default:
-				break
+				break cleanupLoop
 			}
 		}
 		logger.Debug("Cleaned up %d excess HTTP clients", excess)

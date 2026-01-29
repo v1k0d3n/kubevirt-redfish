@@ -71,7 +71,7 @@ type TaskManager struct {
 	taskMutex sync.RWMutex
 
 	// Job queue management
-	jobQueue      chan *Job
+	jobNotify     chan struct{} // Notifies dispatcher when new jobs are available
 	priorityQueue *PriorityQueue
 
 	// Worker pool
@@ -271,8 +271,8 @@ func (w *Worker) processJob(job *Job) {
 			retryDelay := job.RetryDelay * time.Duration(job.RetryCount)
 			logger.Debug("DEBUG: Worker %d scheduling job %s retry in %v", w.ID, job.ID, retryDelay)
 			time.AfterFunc(retryDelay, func() {
-				logger.Debug("DEBUG: Worker %d retry timer fired for job %s, pushing back to queue", w.ID, job.ID)
-				w.taskMgr.priorityQueue.Push(job)
+				logger.Debug("DEBUG: Worker %d retry timer fired for job %s, queueing for retry", w.ID, job.ID)
+				w.taskMgr.QueueJob(job)
 			})
 		} else {
 			logger.Debug("DEBUG: Worker %d job %s failed after %d retries, marking task as failed", w.ID, job.ID, job.MaxRetries)
@@ -416,7 +416,7 @@ func NewTaskManager(workerCount int, kubevirtClient *kubevirt.Client) *TaskManag
 
 	tm := &TaskManager{
 		tasks:          make(map[string]*TaskInfo),
-		jobQueue:       make(chan *Job, 100), // Buffer for job queue
+		jobNotify:      make(chan struct{}, 1), // Buffered channel to notify dispatcher
 		priorityQueue:  NewPriorityQueue(),
 		workerCount:    workerCount,
 		kubevirtClient: kubevirtClient,
@@ -456,11 +456,9 @@ func (tm *TaskManager) startWorkers() {
 }
 
 // jobDispatcher dispatches jobs from the priority queue to available workers
-// It tries to distribute jobs evenly across all workers using round-robin
+// It uses channel-based notification instead of polling for better efficiency
 func (tm *TaskManager) jobDispatcher() {
 	logger.Debug("DEBUG: Starting job dispatcher")
-	ticker := time.NewTicker(50 * time.Millisecond) // Check for jobs every 50ms
-	defer ticker.Stop()
 
 	for {
 		select {
@@ -470,47 +468,59 @@ func (tm *TaskManager) jobDispatcher() {
 		case <-tm.stopChan:
 			logger.Debug("DEBUG: Job dispatcher stop signal received, stopping")
 			return
-		case <-ticker.C:
-			// Try to dispatch multiple jobs per tick to distribute load better
-			jobsDispatched := 0
-			maxJobsPerTick := 5 // Limit jobs per tick to prevent one worker from getting all jobs
-
-		dispatchLoop:
-			for jobsDispatched < maxJobsPerTick {
-				// Get next job from priority queue
-				job := tm.priorityQueue.Pop()
-				if job == nil {
-					break // No more jobs in queue
-				}
-
-				logger.Debug("DEBUG: Job dispatcher popped job %s (task %s) from queue", job.ID, job.TaskID)
-
-				// Find available worker using round-robin
-				worker := tm.getAvailableWorker()
-				if worker != nil {
-					logger.Debug("DEBUG: Job dispatcher found available worker %d for job %s", worker.ID, job.ID)
-					select {
-					case worker.jobChan <- job:
-						logger.Debug("DEBUG: Job dispatcher successfully assigned job %s to worker %d", job.ID, worker.ID)
-						tm.updateQueueStats(-1)
-						jobsDispatched++
-						// Small delay to allow other workers to become available
-						time.Sleep(10 * time.Millisecond)
-					default:
-						// Worker channel is full, put job back in queue
-						logger.Debug("DEBUG: Job dispatcher worker %d channel is full, putting job %s back in queue", worker.ID, job.ID)
-						tm.priorityQueue.Push(job)
-						break dispatchLoop // Exit for loop, try again next tick
-					}
-				} else {
-					// No available workers, put job back in queue
-					logger.Debug("DEBUG: Job dispatcher no available workers, putting job %s back in queue", job.ID)
-					tm.priorityQueue.Push(job)
-					break dispatchLoop // Exit for loop, all workers busy
-				}
-			}
+		case <-tm.jobNotify:
+			// Dispatch all available jobs when notified
+			tm.dispatchAvailableJobs()
 		}
 	}
+}
+
+// dispatchAvailableJobs dispatches all available jobs to workers using round-robin
+func (tm *TaskManager) dispatchAvailableJobs() {
+	for {
+		// Get next job from priority queue
+		job := tm.priorityQueue.Pop()
+		if job == nil {
+			return // No more jobs in queue
+		}
+
+		logger.Debug("DEBUG: Job dispatcher popped job %s (task %s) from queue", job.ID, job.TaskID)
+
+		// Find available worker using round-robin
+		worker := tm.getAvailableWorker()
+		if worker != nil {
+			logger.Debug("DEBUG: Job dispatcher found available worker %d for job %s", worker.ID, job.ID)
+			select {
+			case worker.jobChan <- job:
+				logger.Debug("DEBUG: Job dispatcher successfully assigned job %s to worker %d", job.ID, worker.ID)
+				tm.updateQueueStats(-1)
+			default:
+				// Worker channel is full, put job back and schedule retry
+				logger.Debug("DEBUG: Job dispatcher worker %d channel is full, scheduling retry for job %s", worker.ID, job.ID)
+				tm.priorityQueue.Push(job)
+				tm.scheduleDispatchRetry()
+				return
+			}
+		} else {
+			// No available workers, put job back and schedule retry
+			logger.Debug("DEBUG: Job dispatcher no available workers, scheduling retry for job %s", job.ID)
+			tm.priorityQueue.Push(job)
+			tm.scheduleDispatchRetry()
+			return
+		}
+	}
+}
+
+// scheduleDispatchRetry schedules a retry notification when workers are busy
+func (tm *TaskManager) scheduleDispatchRetry() {
+	time.AfterFunc(10*time.Millisecond, func() {
+		select {
+		case tm.jobNotify <- struct{}{}:
+			logger.Debug("DEBUG: Scheduled dispatch retry notification sent")
+		default:
+			// Already notified
+		}
+	})
 }
 
 // getAvailableWorker returns an available worker using round-robin distribution
@@ -602,13 +612,12 @@ func (tm *TaskManager) CreateTask(name, namespace, vmName, mediaID, imageURL str
 
 	logger.Debug("DEBUG: Created job %s for task %s", job.ID, taskID)
 
-	tm.priorityQueue.Push(job)
-	logger.Debug("DEBUG: Pushed job %s to priority queue", job.ID)
+	tm.QueueJob(job)
+	logger.Debug("DEBUG: Queued job %s to priority queue", job.ID)
 
 	tm.updateStats(0, true) // Task created
-	tm.updateQueueStats(1)
 
-	logger.Debug("DEBUG: Updated stats and queue stats for job %s", job.ID)
+	logger.Debug("DEBUG: Updated stats for job %s", job.ID)
 
 	logger.Info("Created task %s and queued job %s for virtual media insertion", taskID, job.ID)
 	logger.Debug("DEBUG: Task creation complete - taskID=%s, jobID=%s", taskID, job.ID)
@@ -710,6 +719,20 @@ func (tm *TaskManager) updateQueueStats(delta int64) {
 	tm.statsMutex.Lock()
 	defer tm.statsMutex.Unlock()
 	tm.stats.QueueSize += delta
+}
+
+// QueueJob adds a job to the priority queue and notifies the dispatcher
+func (tm *TaskManager) QueueJob(job *Job) {
+	tm.priorityQueue.Push(job)
+	tm.updateQueueStats(1)
+	// Notify dispatcher without blocking (using select with default)
+	select {
+	case tm.jobNotify <- struct{}{}:
+		logger.Debug("DEBUG: Notified dispatcher about new job %s", job.ID)
+	default:
+		// Channel already has a pending notification, dispatcher will process all available jobs
+		logger.Debug("DEBUG: Dispatcher already notified, job %s will be processed", job.ID)
+	}
 }
 
 // GetStats returns task manager statistics
