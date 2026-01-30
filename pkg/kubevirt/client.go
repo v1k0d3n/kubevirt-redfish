@@ -2892,6 +2892,49 @@ func (c *Client) isPVCUsable(pvc *corev1.PersistentVolumeClaim) bool {
 	return false
 }
 
+// IsVirtualMediaReady checks if the virtual media (ISO) for a VM is ready
+// It returns true if there are no active helper pods copying ISO files for this VM
+// This should be called before powering on a VM to ensure the boot ISO is ready
+func (c *Client) IsVirtualMediaReady(namespace, vmName string) (bool, string, error) {
+	// List pods that match the helper pod naming pattern for this VM
+	// Helper pods are named: copy-iso-{vmName}-bootiso-{timestamp}-{random}-{timestamp}
+	labelSelector := "" // We'll filter by name prefix instead
+
+	pods, err := c.kubernetesClient.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
+	if err != nil {
+		return false, "", fmt.Errorf("failed to list pods: %w", err)
+	}
+
+	// Check for any active helper pods for this VM
+	helperPodPrefix := fmt.Sprintf("copy-iso-%s-bootiso-", vmName)
+	var activePods []string
+
+	for _, pod := range pods.Items {
+		// Check if this is a helper pod for our VM
+		if !strings.HasPrefix(pod.Name, helperPodPrefix) {
+			continue
+		}
+
+		// Check if the pod is still active (Running or Pending)
+		if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodPending {
+			activePods = append(activePods, pod.Name)
+			logger.Debug("Found active helper pod %s for VM %s/%s with status %s",
+				pod.Name, namespace, vmName, pod.Status.Phase)
+		}
+	}
+
+	if len(activePods) > 0 {
+		message := fmt.Sprintf("Virtual media ISO is still being downloaded. Active helper pods: %v", activePods)
+		logger.Info("Virtual media not ready for VM %s/%s: %s", namespace, vmName, message)
+		return false, message, nil
+	}
+
+	logger.Debug("Virtual media is ready for VM %s/%s (no active helper pods found)", namespace, vmName)
+	return true, "", nil
+}
+
 // sanitizeResourceName sanitizes a resource name to ensure it is a valid Kubernetes resource name
 // It truncates the resourceName to 63 characters if it's longer that that and ensures it ends with
 // alphanumeric character by appending "truncated" string, it also avoids name collisions by using a hash of the name

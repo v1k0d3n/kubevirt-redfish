@@ -1912,7 +1912,53 @@ func (s *Server) handlePowerAction(w http.ResponseWriter, r *http.Request, syste
 		return
 	}
 
-	// Execute the power action
+	// For power-on operations, check if virtual media (ISO) is ready
+	// If not ready, create an async task that will wait for ISO and then execute the reset
+	if powerState == "On" || powerState == "ForceRestart" || powerState == "GracefulRestart" {
+		ready, message, err := s.kubevirtClient.IsVirtualMediaReady(namespace, vmName)
+		if err != nil {
+			logger.Error("Failed to check virtual media status for VM %s/%s: %v", namespace, vmName, err)
+			// Don't block on error - proceed with power action immediately
+		} else if !ready {
+			// ISO is not ready - create an async task to wait and then execute reset
+			logger.Info("Virtual media not ready for VM %s/%s, creating async task: %s", namespace, vmName, message)
+
+			// Generate the correct System ID for the response
+			responseSystemID := config.GenerateSystemID(s.config.SystemIDConvention, namespace, vmName)
+
+			// Create async task for power reset
+			taskName := fmt.Sprintf("Power Reset %s for VM %s (waiting for ISO)", powerState, vmName)
+			taskID := s.taskManager.CreatePowerResetTask(taskName, namespace, vmName, powerState)
+
+			// Get the task to return in the response
+			task, exists := s.taskManager.GetTask(taskID)
+			if !exists {
+				logger.Error("Task %s not found after creation", taskID)
+				s.sendInternalError(w, "Failed to create task")
+				return
+			}
+
+			// Convert task to Redfish format
+			redfishTask := task.ToRedfishTask()
+
+			// Return 202 Accepted with the task resource
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Location", fmt.Sprintf("/redfish/v1/TaskService/Tasks/%s", taskID))
+			w.WriteHeader(http.StatusAccepted)
+			s.setCacheHeaders(w, "action")
+			s.encodeJSONResponse(w, redfishTask)
+
+			logger.Info("Created async power reset task %s for VM %s/%s (ISO still downloading)", taskID, namespace, vmName)
+
+			// Invalidate related cache entries
+			s.responseCache.Invalidate(fmt.Sprintf("Systems/%s", responseSystemID))
+			s.responseCache.Invalidate("Systems")
+
+			return
+		}
+	}
+
+	// Execute the power action (ISO is ready or not applicable)
 	err := s.kubevirtClient.SetVMPowerState(namespace, vmName, powerState)
 	if err != nil {
 		logger.Error("Failed to set power state for VM %s: %v", vmName, err)

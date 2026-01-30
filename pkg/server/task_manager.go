@@ -47,6 +47,7 @@ const (
 	TaskTypeVirtualMediaInsert TaskType = "virtual_media_insert"
 	TaskTypeVirtualMediaEject  TaskType = "virtual_media_eject"
 	TaskTypePowerAction        TaskType = "power_action"
+	TaskTypePowerResetWithWait TaskType = "power_reset_with_wait" // Reset that waits for ISO to be ready
 	TaskTypeBootUpdate         TaskType = "boot_update"
 	TaskTypeSystemMaintenance  TaskType = "system_maintenance"
 )
@@ -243,6 +244,9 @@ func (w *Worker) processJob(job *Job) {
 	case TaskTypePowerAction:
 		logger.Debug("DEBUG: Worker %d processing PowerAction job %s", w.ID, job.ID)
 		err = w.processPowerAction(job)
+	case TaskTypePowerResetWithWait:
+		logger.Debug("DEBUG: Worker %d processing PowerResetWithWait job %s", w.ID, job.ID)
+		err = w.processPowerResetWithWait(job)
 	case TaskTypeBootUpdate:
 		logger.Debug("DEBUG: Worker %d processing BootUpdate job %s", w.ID, job.ID)
 		err = w.processBootUpdate(job)
@@ -404,6 +408,88 @@ func (w *Worker) processBootUpdate(job *Job) error {
 	time.Sleep(1 * time.Second) // Simulate work
 
 	if err := w.taskMgr.UpdateTaskProgress(job.TaskID, "Boot configuration updated"); err != nil {
+		logger.Error("Failed to update task progress for job %s: %v", job.ID, err)
+	}
+
+	return nil
+}
+
+// processPowerResetWithWait processes a power reset job that waits for virtual media (ISO) to be ready
+// This is used when the client requests a Reset but the ISO is still being downloaded
+func (w *Worker) processPowerResetWithWait(job *Job) error {
+	payload, ok := job.Payload.(map[string]string)
+	if !ok {
+		return fmt.Errorf("invalid payload for power reset job")
+	}
+
+	namespace := payload["namespace"]
+	vmName := payload["vmName"]
+	resetType := payload["resetType"]
+
+	const (
+		maxWaitTime   = 5 * time.Minute  // Maximum time to wait for ISO to be ready
+		retryInterval = 10 * time.Second // Check every 10 seconds
+	)
+
+	// Update progress
+	if err := w.taskMgr.UpdateTaskProgress(job.TaskID, "Waiting for virtual media (ISO) to be ready"); err != nil {
+		logger.Error("Failed to update task progress for job %s: %v", job.ID, err)
+	}
+
+	startTime := time.Now()
+
+	// Wait for virtual media to be ready
+	for {
+		ready, message, err := w.taskMgr.kubevirtClient.IsVirtualMediaReady(namespace, vmName)
+		if err != nil {
+			logger.Error("Failed to check virtual media status for VM %s/%s: %v", namespace, vmName, err)
+			// Don't block on error - proceed with power action
+			break
+		}
+
+		if ready {
+			elapsed := time.Since(startTime)
+			if elapsed > time.Second {
+				logger.Info("Virtual media is now ready for VM %s/%s after waiting %v", namespace, vmName, elapsed)
+				if err := w.taskMgr.UpdateTaskProgress(job.TaskID, fmt.Sprintf("Virtual media ready after %v", elapsed.Round(time.Second))); err != nil {
+					logger.Error("Failed to update task progress for job %s: %v", job.ID, err)
+				}
+			}
+			break
+		}
+
+		elapsed := time.Since(startTime)
+
+		// Check if we've exceeded the maximum wait time
+		if elapsed >= maxWaitTime {
+			logger.Error("Timeout waiting for virtual media to be ready for VM %s/%s after %v: %s", namespace, vmName, elapsed, message)
+			return fmt.Errorf("timeout waiting for ISO download after %v: %s", elapsed, message)
+		}
+
+		// Log progress
+		logger.Info("Waiting for virtual media to be ready for VM %s/%s (elapsed: %v, max: %v): %s",
+			namespace, vmName, elapsed.Round(time.Second), maxWaitTime, message)
+
+		if err := w.taskMgr.UpdateTaskProgress(job.TaskID, fmt.Sprintf("Waiting for ISO (elapsed: %v)", elapsed.Round(time.Second))); err != nil {
+			logger.Error("Failed to update task progress for job %s: %v", job.ID, err)
+		}
+
+		time.Sleep(retryInterval)
+	}
+
+	// Now execute the power action
+	if err := w.taskMgr.UpdateTaskProgress(job.TaskID, fmt.Sprintf("Executing power action: %s", resetType)); err != nil {
+		logger.Error("Failed to update task progress for job %s: %v", job.ID, err)
+	}
+
+	err := w.taskMgr.kubevirtClient.SetVMPowerState(namespace, vmName, resetType)
+	if err != nil {
+		logger.Error("Failed to set power state %s for VM %s/%s: %v", resetType, namespace, vmName, err)
+		return fmt.Errorf("failed to execute power action %s: %w", resetType, err)
+	}
+
+	logger.Info("Successfully executed power action %s for VM %s/%s", resetType, namespace, vmName)
+	if err := w.taskMgr.UpdateTaskProgress(job.TaskID, fmt.Sprintf("Power action %s completed successfully", resetType)); err != nil {
 		logger.Error("Failed to update task progress for job %s: %v", job.ID, err)
 	}
 
@@ -621,6 +707,65 @@ func (tm *TaskManager) CreateTask(name, namespace, vmName, mediaID, imageURL str
 
 	logger.Info("Created task %s and queued job %s for virtual media insertion", taskID, job.ID)
 	logger.Debug("DEBUG: Task creation complete - taskID=%s, jobID=%s", taskID, job.ID)
+
+	return taskID
+}
+
+// CreatePowerResetTask creates a new task for power reset that waits for ISO to be ready
+// This is used when a Reset is requested but the virtual media (ISO) is still downloading
+func (tm *TaskManager) CreatePowerResetTask(name, namespace, vmName, resetType string) string {
+	logger.Debug("DEBUG: Creating power reset task - name=%s, namespace=%s, vmName=%s, resetType=%s",
+		name, namespace, vmName, resetType)
+
+	tm.taskMutex.Lock()
+	defer tm.taskMutex.Unlock()
+
+	taskID := fmt.Sprintf("task-%d", time.Now().UnixNano())
+
+	logger.Debug("DEBUG: Generated taskID=%s for power reset", taskID)
+
+	task := &TaskInfo{
+		ID:         taskID,
+		Name:       name,
+		TaskState:  redfish.TaskStatePending,
+		TaskStatus: "OK",
+		StartTime:  time.Now(),
+		Namespace:  namespace,
+		VMName:     vmName,
+		Messages: []redfish.Message{
+			{
+				Message: fmt.Sprintf("Created task for power reset %s (waiting for ISO)", resetType),
+			},
+		},
+	}
+
+	tm.tasks[taskID] = task
+	logger.Debug("DEBUG: Stored power reset task %s in task map", taskID)
+
+	// Create and queue job
+	job := &Job{
+		ID:         fmt.Sprintf("job-%d", time.Now().UnixNano()),
+		TaskID:     taskID,
+		Type:       TaskTypePowerResetWithWait,
+		Priority:   PriorityHigh, // Power actions should have high priority
+		CreatedAt:  time.Now(),
+		MaxRetries: 1, // Don't retry power actions multiple times
+		RetryDelay: 5 * time.Second,
+		Payload: map[string]string{
+			"namespace": namespace,
+			"vmName":    vmName,
+			"resetType": resetType,
+		},
+	}
+
+	logger.Debug("DEBUG: Created job %s for power reset task %s", job.ID, taskID)
+
+	tm.QueueJob(job)
+	logger.Debug("DEBUG: Queued power reset job %s to priority queue", job.ID)
+
+	tm.updateStats(0, true) // Task created
+
+	logger.Info("Created task %s and queued job %s for power reset (waiting for ISO)", taskID, job.ID)
 
 	return taskID
 }
