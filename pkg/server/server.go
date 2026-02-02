@@ -1917,18 +1917,25 @@ func (s *Server) handlePowerAction(w http.ResponseWriter, r *http.Request, syste
 	if powerState == "On" || powerState == "ForceRestart" || powerState == "GracefulRestart" {
 		ready, message, err := s.kubevirtClient.IsVirtualMediaReady(namespace, vmName)
 		if err != nil {
-			logger.Error("Failed to check virtual media status for VM %s/%s: %v", namespace, vmName, err)
-			// Don't block on error - proceed with power action immediately
-		} else if !ready {
+			// On error checking virtual media status, create async task to be safe
+			// This prevents premature boots if the API has transient failures
+			logger.Warning("Failed to check virtual media status for VM %s/%s: %v (creating async task to be safe)", namespace, vmName, err)
+			message = fmt.Sprintf("API error: %v", err)
+			ready = false // Treat as not ready to be safe
+		}
+		if !ready {
 			// ISO is not ready - create an async task to wait and then execute reset
 			logger.Info("Virtual media not ready for VM %s/%s, creating async task: %s", namespace, vmName, message)
+
+			// Get the ISO download timeout from config
+			_, _, _, _, isoDownloadTimeout, _ := s.config.GetDataVolumeConfig()
 
 			// Generate the correct System ID for the response
 			responseSystemID := config.GenerateSystemID(s.config.SystemIDConvention, namespace, vmName)
 
 			// Create async task for power reset
 			taskName := fmt.Sprintf("Power Reset %s for VM %s (waiting for ISO)", powerState, vmName)
-			taskID := s.taskManager.CreatePowerResetTask(taskName, namespace, vmName, powerState)
+			taskID := s.taskManager.CreatePowerResetTask(taskName, namespace, vmName, powerState, isoDownloadTimeout)
 
 			// Get the task to return in the response
 			task, exists := s.taskManager.GetTask(taskID)

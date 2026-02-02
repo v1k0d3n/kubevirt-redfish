@@ -425,11 +425,14 @@ func (w *Worker) processPowerResetWithWait(job *Job) error {
 	namespace := payload["namespace"]
 	vmName := payload["vmName"]
 	resetType := payload["resetType"]
+	isoDownloadTimeout := payload["isoDownloadTimeout"]
 
-	const (
-		maxWaitTime   = 5 * time.Minute  // Maximum time to wait for ISO to be ready
-		retryInterval = 10 * time.Second // Check every 10 seconds
-	)
+	// Parse the ISO download timeout from the payload
+	maxWaitTime, err := time.ParseDuration(isoDownloadTimeout)
+	if err != nil {
+		return fmt.Errorf("invalid or missing isoDownloadTimeout in payload: %w", err)
+	}
+	retryInterval := 10 * time.Second
 
 	// Update progress
 	if err := w.taskMgr.UpdateTaskProgress(job.TaskID, "Waiting for virtual media (ISO) to be ready"); err != nil {
@@ -442,12 +445,9 @@ func (w *Worker) processPowerResetWithWait(job *Job) error {
 	for {
 		ready, message, err := w.taskMgr.kubevirtClient.IsVirtualMediaReady(namespace, vmName)
 		if err != nil {
-			logger.Error("Failed to check virtual media status for VM %s/%s: %v", namespace, vmName, err)
-			// Don't block on error - proceed with power action
-			break
-		}
-
-		if ready {
+			// Log warning and continue retrying - transient API errors should not cause premature boots
+			logger.Warning("Failed to check virtual media status for VM %s/%s: %v (will retry)", namespace, vmName, err)
+		} else if ready {
 			elapsed := time.Since(startTime)
 			if elapsed > time.Second {
 				logger.Info("Virtual media is now ready for VM %s/%s after waiting %v", namespace, vmName, elapsed)
@@ -482,7 +482,7 @@ func (w *Worker) processPowerResetWithWait(job *Job) error {
 		logger.Error("Failed to update task progress for job %s: %v", job.ID, err)
 	}
 
-	err := w.taskMgr.kubevirtClient.SetVMPowerState(namespace, vmName, resetType)
+	err = w.taskMgr.kubevirtClient.SetVMPowerState(namespace, vmName, resetType)
 	if err != nil {
 		logger.Error("Failed to set power state %s for VM %s/%s: %v", resetType, namespace, vmName, err)
 		return fmt.Errorf("failed to execute power action %s: %w", resetType, err)
@@ -713,9 +713,9 @@ func (tm *TaskManager) CreateTask(name, namespace, vmName, mediaID, imageURL str
 
 // CreatePowerResetTask creates a new task for power reset that waits for ISO to be ready
 // This is used when a Reset is requested but the virtual media (ISO) is still downloading
-func (tm *TaskManager) CreatePowerResetTask(name, namespace, vmName, resetType string) string {
-	logger.Debug("DEBUG: Creating power reset task - name=%s, namespace=%s, vmName=%s, resetType=%s",
-		name, namespace, vmName, resetType)
+func (tm *TaskManager) CreatePowerResetTask(name, namespace, vmName, resetType, isoDownloadTimeout string) string {
+	logger.Debug("DEBUG: Creating power reset task - name=%s, namespace=%s, vmName=%s, resetType=%s, isoDownloadTimeout=%s",
+		name, namespace, vmName, resetType, isoDownloadTimeout)
 
 	tm.taskMutex.Lock()
 	defer tm.taskMutex.Unlock()
@@ -752,9 +752,10 @@ func (tm *TaskManager) CreatePowerResetTask(name, namespace, vmName, resetType s
 		MaxRetries: 1, // Don't retry power actions multiple times
 		RetryDelay: 5 * time.Second,
 		Payload: map[string]string{
-			"namespace": namespace,
-			"vmName":    vmName,
-			"resetType": resetType,
+			"namespace":          namespace,
+			"vmName":             vmName,
+			"resetType":          resetType,
+			"isoDownloadTimeout": isoDownloadTimeout,
 		},
 	}
 
