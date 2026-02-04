@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
+	kubevirtv1 "kubevirt.io/api/core/v1"
 )
 
 // Mock config that implements the required interfaces
@@ -2564,212 +2565,115 @@ func TestGetVMNetworkDetailsReal(t *testing.T) {
 
 // TestSetBootOrderLogic tests the SetBootOrder function logic in isolation
 func TestSetBootOrderLogic(t *testing.T) {
+	// Helper to create a typed VM for testing
+	createTestVM := func(disks []kubevirtv1.Disk, volumes []kubevirtv1.Volume) *kubevirtv1.VirtualMachine {
+		return &kubevirtv1.VirtualMachine{
+			Spec: kubevirtv1.VirtualMachineSpec{
+				Template: &kubevirtv1.VirtualMachineInstanceTemplateSpec{
+					Spec: kubevirtv1.VirtualMachineInstanceSpec{
+						Domain: kubevirtv1.DomainSpec{
+							Devices: kubevirtv1.Devices{
+								Disks: disks,
+							},
+						},
+						Volumes: volumes,
+					},
+				},
+			},
+		}
+	}
+
 	// Test cases for boot order logic
 	testCases := []struct {
 		name       string
 		bootTarget string
-		vmSpec     map[string]interface{}
-		expected   map[string]interface{}
+		disks      []kubevirtv1.Disk
+		volumes    []kubevirtv1.Volume
+		expected   map[string]*uint // disk name -> expected boot order (nil means no boot order)
 	}{
 		{
 			name:       "Set CD-ROM as first boot device",
 			bootTarget: "Cd",
-			vmSpec: map[string]interface{}{
-				"spec": map[string]interface{}{
-					"template": map[string]interface{}{
-						"spec": map[string]interface{}{
-							"domain": map[string]interface{}{
-								"devices": map[string]interface{}{
-									"disks": []interface{}{
-										map[string]interface{}{
-											"name": "cdrom0",
-										},
-										map[string]interface{}{
-											"name": "disk1",
-										},
-									},
-								},
-							},
-							"volumes": []interface{}{
-								map[string]interface{}{
-									"name": "cdrom0",
-								},
-								map[string]interface{}{
-									"name":       "disk1",
-									"dataVolume": map[string]interface{}{},
-								},
-							},
-						},
-					},
-				},
+			disks: []kubevirtv1.Disk{
+				{Name: "cdrom0"},
+				{Name: "disk1"},
 			},
-			expected: map[string]interface{}{
-				"cdrom0": int64(1),
-				"disk1":  int64(2),
+			volumes: []kubevirtv1.Volume{
+				{Name: "cdrom0"},
+				{Name: "disk1", VolumeSource: kubevirtv1.VolumeSource{DataVolume: &kubevirtv1.DataVolumeSource{}}},
+			},
+			expected: map[string]*uint{
+				"cdrom0": uintPtr(1),
+				"disk1":  uintPtr(2),
 			},
 		},
 		{
 			name:       "Set CD-ROM as first boot device when boot 1 taken",
 			bootTarget: "Cd",
-			vmSpec: map[string]interface{}{
-				"spec": map[string]interface{}{
-					"template": map[string]interface{}{
-						"spec": map[string]interface{}{
-							"domain": map[string]interface{}{
-								"devices": map[string]interface{}{
-									"disks": []interface{}{
-										map[string]interface{}{
-											"name": "cdrom0",
-										},
-										map[string]interface{}{
-											"name":      "disk1",
-											"bootOrder": int64(1),
-										},
-									},
-								},
-							},
-							"volumes": []interface{}{
-								map[string]interface{}{
-									"name": "cdrom0",
-								},
-								map[string]interface{}{
-									"name":       "disk1",
-									"dataVolume": map[string]interface{}{},
-								},
-							},
-						},
-					},
-				},
+			disks: []kubevirtv1.Disk{
+				{Name: "cdrom0"},
+				{Name: "disk1", BootOrder: uintPtr(1)},
 			},
-			expected: map[string]interface{}{
-				"cdrom0": int64(1),
-				"disk1":  int64(2),
+			volumes: []kubevirtv1.Volume{
+				{Name: "cdrom0"},
+				{Name: "disk1", VolumeSource: kubevirtv1.VolumeSource{DataVolume: &kubevirtv1.DataVolumeSource{}}},
+			},
+			expected: map[string]*uint{
+				"cdrom0": uintPtr(1),
+				"disk1":  uintPtr(2),
 			},
 		},
 		{
 			name:       "Set CD-ROM as first boot device, ignore cloudInit",
 			bootTarget: "Cd",
-			vmSpec: map[string]interface{}{
-				"spec": map[string]interface{}{
-					"template": map[string]interface{}{
-						"spec": map[string]interface{}{
-							"domain": map[string]interface{}{
-								"devices": map[string]interface{}{
-									"disks": []interface{}{
-										map[string]interface{}{
-											"name": "cdrom0",
-										},
-										map[string]interface{}{
-											"name": "disk1",
-										},
-										map[string]interface{}{
-											"name": "cloudinitdisk",
-										},
-									},
-								},
-							},
-							"volumes": []interface{}{
-								map[string]interface{}{
-									"name": "cdrom0",
-								},
-								map[string]interface{}{
-									"name":       "disk1",
-									"dataVolume": map[string]interface{}{},
-								},
-								map[string]interface{}{
-									"name":             "cloudinitdisk",
-									"cloudInitNoCloud": map[string]interface{}{},
-								},
-							},
-						},
-					},
-				},
+			disks: []kubevirtv1.Disk{
+				{Name: "cdrom0"},
+				{Name: "disk1"},
+				{Name: "cloudinitdisk"},
 			},
-			expected: map[string]interface{}{
-				"cdrom0":        int64(1),
-				"disk1":         int64(2),
+			volumes: []kubevirtv1.Volume{
+				{Name: "cdrom0"},
+				{Name: "disk1", VolumeSource: kubevirtv1.VolumeSource{DataVolume: &kubevirtv1.DataVolumeSource{}}},
+				{Name: "cloudinitdisk", VolumeSource: kubevirtv1.VolumeSource{CloudInitNoCloud: &kubevirtv1.CloudInitNoCloudSource{}}},
+			},
+			expected: map[string]*uint{
+				"cdrom0":        uintPtr(1),
+				"disk1":         uintPtr(2),
 				"cloudinitdisk": nil,
 			},
 		},
 		{
 			name:       "Set disk as first boot device",
 			bootTarget: "Hdd",
-			vmSpec: map[string]interface{}{
-				"spec": map[string]interface{}{
-					"template": map[string]interface{}{
-						"spec": map[string]interface{}{
-							"domain": map[string]interface{}{
-								"devices": map[string]interface{}{
-									"disks": []interface{}{
-										map[string]interface{}{
-											"name": "cdrom0",
-										},
-										map[string]interface{}{
-											"name": "disk1",
-										},
-									},
-								},
-							},
-							"volumes": []interface{}{
-								map[string]interface{}{
-									"name": "cdrom0",
-								},
-								map[string]interface{}{
-									"name":       "disk1",
-									"dataVolume": map[string]interface{}{},
-								},
-							},
-						},
-					},
-				},
+			disks: []kubevirtv1.Disk{
+				{Name: "cdrom0"},
+				{Name: "disk1"},
 			},
-			expected: map[string]interface{}{
+			volumes: []kubevirtv1.Volume{
+				{Name: "cdrom0"},
+				{Name: "disk1", VolumeSource: kubevirtv1.VolumeSource{DataVolume: &kubevirtv1.DataVolumeSource{}}},
+			},
+			expected: map[string]*uint{
 				"cdrom0": nil,
-				"disk1":  int64(1),
+				"disk1":  uintPtr(1),
 			},
 		},
 		{
 			name:       "Set disk as first boot device ignore cloud init",
 			bootTarget: "Hdd",
-			vmSpec: map[string]interface{}{
-				"spec": map[string]interface{}{
-					"template": map[string]interface{}{
-						"spec": map[string]interface{}{
-							"domain": map[string]interface{}{
-								"devices": map[string]interface{}{
-									"disks": []interface{}{
-										map[string]interface{}{
-											"name": "cdrom0",
-										},
-										map[string]interface{}{
-											"name": "disk1",
-										},
-										map[string]interface{}{
-											"name": "cloudinitdisk",
-										},
-									},
-								},
-							},
-							"volumes": []interface{}{
-								map[string]interface{}{
-									"name": "cdrom0",
-								},
-								map[string]interface{}{
-									"name":       "disk1",
-									"dataVolume": map[string]interface{}{},
-								},
-								map[string]interface{}{
-									"name":             "cloudinitdisk",
-									"cloudInitNoCloud": map[string]interface{}{},
-								},
-							},
-						},
-					},
-				},
+			disks: []kubevirtv1.Disk{
+				{Name: "cdrom0"},
+				{Name: "disk1"},
+				{Name: "cloudinitdisk"},
 			},
-			expected: map[string]interface{}{
+			volumes: []kubevirtv1.Volume{
+				{Name: "cdrom0"},
+				{Name: "disk1", VolumeSource: kubevirtv1.VolumeSource{DataVolume: &kubevirtv1.DataVolumeSource{}}},
+				{Name: "cloudinitdisk", VolumeSource: kubevirtv1.VolumeSource{CloudInitNoCloud: &kubevirtv1.CloudInitNoCloudSource{}}},
+			},
+			expected: map[string]*uint{
 				"cdrom0":        nil,
-				"disk1":         int64(1),
+				"disk1":         uintPtr(1),
 				"cloudinitdisk": nil,
 			},
 		},
@@ -2779,34 +2683,30 @@ func TestSetBootOrderLogic(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Create mock VM object
-			vm := &unstructured.Unstructured{}
-			vm.SetUnstructuredContent(tc.vmSpec)
+			// Create typed VM object
+			vm := createTestVM(tc.disks, tc.volumes)
 
-			// Simulate the boot order logic
-			client.modifyVmBootOrder(vm, tc.bootTarget)
-
-			// Verify the results
-			devices, found, err := unstructured.NestedMap(vm.Object, "spec", "template", "spec", "domain", "devices")
-			if !found || err != nil {
-				t.Errorf("modified VM has no devices: found:%v err:%v", found, err)
+			// Call the boot order logic
+			err := client.modifyVmBootOrder(vm, tc.bootTarget)
+			if err != nil {
+				t.Errorf("modifyVmBootOrder failed: %v", err)
+				return
 			}
 
+			// Verify the results
 			testedDisks := map[string]bool{}
-			if disks, found := devices["disks"].([]interface{}); found {
-				for _, disk := range disks {
-					if diskMap, ok := disk.(map[string]interface{}); ok {
-						if diskName, found := diskMap["name"].(string); found {
-							testedDisks[diskName] = true
-							if expectedOrder, exists := tc.expected[diskName]; exists {
-								if actualOrder, found := diskMap["bootOrder"]; found {
-									if actualOrder != expectedOrder {
-										t.Errorf("Disk %s: expected boot order %v, got %v", diskName, expectedOrder, actualOrder)
-									}
-								} else if expectedOrder != nil {
-									t.Errorf("Disk %s: expected boot order %v, but none was set", diskName, expectedOrder)
-								}
-							}
+			for _, disk := range vm.Spec.Template.Spec.Domain.Devices.Disks {
+				testedDisks[disk.Name] = true
+				if expectedOrder, exists := tc.expected[disk.Name]; exists {
+					if expectedOrder == nil {
+						if disk.BootOrder != nil {
+							t.Errorf("Disk %s: expected no boot order, got %d", disk.Name, *disk.BootOrder)
+						}
+					} else {
+						if disk.BootOrder == nil {
+							t.Errorf("Disk %s: expected boot order %d, but none was set", disk.Name, *expectedOrder)
+						} else if *disk.BootOrder != *expectedOrder {
+							t.Errorf("Disk %s: expected boot order %d, got %d", disk.Name, *expectedOrder, *disk.BootOrder)
 						}
 					}
 				}
@@ -2819,6 +2719,11 @@ func TestSetBootOrderLogic(t *testing.T) {
 			}
 		})
 	}
+}
+
+// uintPtr is a helper to create a pointer to a uint
+func uintPtr(v uint) *uint {
+	return &v
 }
 
 // TestSetBootOnceLogic tests the SetBootOnce function logic in isolation
