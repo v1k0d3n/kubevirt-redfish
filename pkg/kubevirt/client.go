@@ -48,6 +48,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
@@ -56,6 +57,8 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+
+	kubevirtv1 "kubevirt.io/api/core/v1"
 )
 
 // VMSelectorConfig defines how to select VMs for a chassis
@@ -79,6 +82,41 @@ type Client struct {
 		operationCounts map[string]int64
 		operationTimes  map[string]time.Duration
 	}
+}
+
+// init registers KubeVirt types with the runtime scheme for conversion
+func init() {
+	// Register KubeVirt types with the scheme for runtime conversion
+	_ = kubevirtv1.AddToScheme(scheme.Scheme)
+}
+
+// unstructuredToVM converts an unstructured object to a typed VirtualMachine
+func unstructuredToVM(u *unstructured.Unstructured) (*kubevirtv1.VirtualMachine, error) {
+	vm := &kubevirtv1.VirtualMachine{}
+	err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, vm)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert unstructured to VirtualMachine: %w", err)
+	}
+	return vm, nil
+}
+
+// unstructuredToVMI converts an unstructured object to a typed VirtualMachineInstance
+func unstructuredToVMI(u *unstructured.Unstructured) (*kubevirtv1.VirtualMachineInstance, error) {
+	vmi := &kubevirtv1.VirtualMachineInstance{}
+	err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, vmi)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert unstructured to VirtualMachineInstance: %w", err)
+	}
+	return vmi, nil
+}
+
+// vmToUnstructured converts a typed VirtualMachine to an unstructured object
+func vmToUnstructured(vm *kubevirtv1.VirtualMachine) (*unstructured.Unstructured, error) {
+	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(vm)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert VirtualMachine to unstructured: %w", err)
+	}
+	return &unstructured.Unstructured{Object: obj}, nil
 }
 
 // NewClient creates a new KubeVirt client with connection pooling
@@ -362,7 +400,7 @@ func (c *Client) ListVMsWithSelector(namespace string, vmSelector *VMSelectorCon
 }
 
 // GetVM gets details of a specific VirtualMachine
-func (c *Client) GetVM(namespace, name string) (*unstructured.Unstructured, error) {
+func (c *Client) GetVM(namespace, name string) (*kubevirtv1.VirtualMachine, error) {
 	start := time.Now()
 	defer func() {
 		c.trackOperation("GetVM", time.Since(start))
@@ -373,7 +411,7 @@ func (c *Client) GetVM(namespace, name string) (*unstructured.Unstructured, erro
 		return nil, fmt.Errorf("dynamic client is not initialized")
 	}
 
-	var vm *unstructured.Unstructured
+	var vmUnstructured *unstructured.Unstructured
 
 	err := c.retryWithBackoff(fmt.Sprintf("GetVM %s/%s", namespace, name), func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
@@ -386,7 +424,7 @@ func (c *Client) GetVM(namespace, name string) (*unstructured.Unstructured, erro
 		}
 
 		var getErr error
-		vm, getErr = c.dynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		vmUnstructured, getErr = c.dynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 		return getErr
 	})
 
@@ -395,7 +433,44 @@ func (c *Client) GetVM(namespace, name string) (*unstructured.Unstructured, erro
 		return nil, fmt.Errorf("failed to get VM: %w", err)
 	}
 
+	// Convert unstructured to typed VirtualMachine
+	vm, err := unstructuredToVM(vmUnstructured)
+	if err != nil {
+		logger.Error("Failed to convert VM %s/%s to typed object: %v", namespace, name, err)
+		return nil, fmt.Errorf("failed to convert VM: %w", err)
+	}
+
 	return vm, nil
+}
+
+// GetVMI gets details of a specific VirtualMachineInstance
+func (c *Client) GetVMI(namespace, name string) (*kubevirtv1.VirtualMachineInstance, error) {
+	// Check if dynamicClient is initialized
+	if c.dynamicClient == nil {
+		return nil, fmt.Errorf("dynamic client is not initialized")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+	defer cancel()
+
+	gvr := schema.GroupVersionResource{
+		Group:    "kubevirt.io",
+		Version:  "v1",
+		Resource: "virtualmachineinstances",
+	}
+
+	vmiUnstructured, err := c.dynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get VMI %s: %w", name, err)
+	}
+
+	// Convert unstructured to typed VirtualMachineInstance
+	vmi, err := unstructuredToVMI(vmiUnstructured)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert VMI: %w", err)
+	}
+
+	return vmi, nil
 }
 
 // GetVMPowerState gets the power state of a VirtualMachine
@@ -405,98 +480,72 @@ func (c *Client) GetVMPowerState(namespace, name string) (string, error) {
 		return "Unknown", fmt.Errorf("dynamic client is not initialized")
 	}
 
-	// Fetch the VM resource
-	gvr := schema.GroupVersionResource{
-		Group:    "kubevirt.io",
-		Version:  "v1",
-		Resource: "virtualmachines",
-	}
-
-	vm, err := c.dynamicClient.Resource(gvr).Namespace(namespace).Get(context.Background(), name, metav1.GetOptions{})
+	// Fetch the VM resource using typed API
+	vm, err := c.GetVM(namespace, name)
 	if err != nil {
 		return "Unknown", fmt.Errorf("failed to get VM %s: %w", name, err)
 	}
 
 	// Check for force-stop annotation
-	annotations, found, _ := unstructured.NestedStringMap(vm.Object, "metadata", "annotations")
-	forceStop := found && annotations["kubevirt.io/force-stop"] == "true"
+	annotations := vm.GetAnnotations()
+	forceStop := annotations != nil && annotations["kubevirt.io/force-stop"] == "true"
 
 	// Use printableStatus if available
-	printableStatus, found, _ := unstructured.NestedString(vm.Object, "status", "printableStatus")
-	if found {
+	printableStatus := vm.Status.PrintableStatus
+	if printableStatus != "" {
 		switch printableStatus {
-		case "Running":
+		case kubevirtv1.VirtualMachinePrintableStatus("Running"):
 			return "On", nil
-		case "Stopped":
+		case kubevirtv1.VirtualMachinePrintableStatus("Stopped"):
 			return "Off", nil
-		case "Stopping", "Terminating":
+		case kubevirtv1.VirtualMachinePrintableStatus("Stopping"), kubevirtv1.VirtualMachinePrintableStatus("Terminating"):
 			if forceStop {
 				return "ForceOffInProgress", nil
 			}
 			return "ShuttingDown", nil
-		case "Starting":
+		case kubevirtv1.VirtualMachinePrintableStatus("Starting"):
 			return "PoweringOn", nil
 		}
 	}
 
 	// Check for PodTerminating condition
-	conditions, found, _ := unstructured.NestedSlice(vm.Object, "status", "conditions")
-	if found {
-		for _, cond := range conditions {
-			if condMap, ok := cond.(map[string]interface{}); ok {
-				typeStr, _ := condMap["type"].(string)
-				if typeStr == "PodTerminating" {
-					return "ShuttingDown", nil
-				}
-			}
+	for _, cond := range vm.Status.Conditions {
+		if cond.Type == kubevirtv1.VirtualMachineConditionType("PodTerminating") {
+			return "ShuttingDown", nil
 		}
 	}
 
 	// Check for pending state change requests
-	stateChangeRequests, found, _ := unstructured.NestedSlice(vm.Object, "status", "stateChangeRequests")
-	if found && len(stateChangeRequests) > 0 {
+	if len(vm.Status.StateChangeRequests) > 0 {
 		return "Transitioning", nil
 	}
 
 	// Fallback to VMI phase logic
-	gvrVMI := schema.GroupVersionResource{
-		Group:    "kubevirt.io",
-		Version:  "v1",
-		Resource: "virtualmachineinstances",
-	}
-	vmi, err := c.dynamicClient.Resource(gvrVMI).Namespace(namespace).Get(context.Background(), name, metav1.GetOptions{})
+	vmi, err := c.GetVMI(namespace, name)
 	if err != nil {
 		// If VMI doesn't exist, VM is stopped
 		return "Off", nil
 	}
 
 	// Check for Paused condition in VMI status
-	vmiConditions, found, _ := unstructured.NestedSlice(vmi.Object, "status", "conditions")
-	if found {
-		for _, cond := range vmiConditions {
-			if condMap, ok := cond.(map[string]interface{}); ok {
-				typeStr, _ := condMap["type"].(string)
-				statusStr, _ := condMap["status"].(string)
-				if typeStr == "Paused" && statusStr == "True" {
-					return "Paused", nil
-				}
-			}
+	for _, cond := range vmi.Status.Conditions {
+		if cond.Type == kubevirtv1.VirtualMachineInstancePaused && cond.Status == corev1.ConditionTrue {
+			return "Paused", nil
 		}
 	}
 
-	phase, found, _ := unstructured.NestedString(vmi.Object, "status", "phase")
-	if found {
-		switch phase {
-		case "Running":
-			return "On", nil
-		case "Succeeded":
-			return "On", nil
-		case "Failed":
-			return "Off", nil
-		case "Pending":
-			return "PoweringOn", nil
-		}
+	// Check VMI phase
+	switch vmi.Status.Phase {
+	case kubevirtv1.Running:
+		return "On", nil
+	case kubevirtv1.Succeeded:
+		return "On", nil
+	case kubevirtv1.Failed:
+		return "Off", nil
+	case kubevirtv1.Pending, kubevirtv1.Scheduling, kubevirtv1.Scheduled:
+		return "PoweringOn", nil
 	}
+
 	return "Off", nil
 }
 
@@ -1118,28 +1167,15 @@ func (c *Client) GetVMNetworkInterfaces(namespace, name string) ([]string, error
 		return nil, fmt.Errorf("dynamic client is not initialized")
 	}
 
-	gvr := schema.GroupVersionResource{
-		Group:    "kubevirt.io",
-		Version:  "v1",
-		Resource: "virtualmachineinstances",
-	}
-
-	vmi, err := c.dynamicClient.Resource(gvr).Namespace(namespace).Get(context.Background(), name, metav1.GetOptions{})
+	vmi, err := c.GetVMI(namespace, name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get VMI %s: %w", name, err)
 	}
 
 	var interfaces []string
-	networkInterfaces, found, err := unstructured.NestedSlice(vmi.Object, "status", "interfaces")
-	if err != nil || !found {
-		return interfaces, nil
-	}
-
-	for _, iface := range networkInterfaces {
-		if ifaceMap, ok := iface.(map[string]interface{}); ok {
-			if name, found := ifaceMap["name"].(string); found && name != "" {
-				interfaces = append(interfaces, name)
-			}
+	for _, iface := range vmi.Status.Interfaces {
+		if iface.Name != "" {
+			interfaces = append(interfaces, iface.Name)
 		}
 	}
 
@@ -1154,16 +1190,13 @@ func (c *Client) GetVMStorage(namespace, name string) ([]string, error) {
 	}
 
 	var storage []string
-	volumes, found, err := unstructured.NestedSlice(vm.Object, "spec", "template", "spec", "volumes")
-	if err != nil || !found {
+	if vm.Spec.Template == nil {
 		return storage, nil
 	}
 
-	for _, volume := range volumes {
-		if volumeMap, ok := volume.(map[string]interface{}); ok {
-			if name, found := volumeMap["name"].(string); found && name != "" {
-				storage = append(storage, name)
-			}
+	for _, volume := range vm.Spec.Template.Spec.Volumes {
+		if volume.Name != "" {
+			storage = append(storage, volume.Name)
 		}
 	}
 
@@ -1184,12 +1217,10 @@ func (c *Client) GetVMBootOptions(namespace, name string) (map[string]interface{
 	}
 
 	// Check for firmware configuration
-	firmware, found, _ := unstructured.NestedMap(vm.Object, "spec", "template", "spec", "domain", "firmware")
-	if found {
-		if bootloader, found := firmware["bootloader"].(map[string]interface{}); found {
-			if _, found := bootloader["efi"]; found {
-				bootOptions["bootSourceOverrideMode"] = "UEFI"
-			}
+	if vm.Spec.Template != nil && vm.Spec.Template.Spec.Domain.Firmware != nil {
+		if vm.Spec.Template.Spec.Domain.Firmware.Bootloader != nil &&
+			vm.Spec.Template.Spec.Domain.Firmware.Bootloader.EFI != nil {
+			bootOptions["bootSourceOverrideMode"] = "UEFI"
 		}
 	}
 
@@ -1252,6 +1283,12 @@ func (c *Client) RecordVMBootOptionsAsAnnotations(namespace, name string, option
 
 	vmCopy.SetAnnotations(annotations)
 
+	// Convert to unstructured for dynamic client update
+	vmUnstructured, err := vmToUnstructured(vmCopy)
+	if err != nil {
+		return fmt.Errorf("failed to convert VM to unstructured: %w", err)
+	}
+
 	// Update VM
 	gvr := schema.GroupVersionResource{
 		Group:    "kubevirt.io",
@@ -1259,7 +1296,7 @@ func (c *Client) RecordVMBootOptionsAsAnnotations(namespace, name string, option
 		Resource: "virtualmachines",
 	}
 
-	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).Update(ctx, vmCopy, metav1.UpdateOptions{})
+	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).Update(ctx, vmUnstructured, metav1.UpdateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to update VM boot options: %w", err)
 	}
@@ -1278,25 +1315,15 @@ func (c *Client) GetVMVirtualMedia(namespace, name string) ([]string, error) {
 	var mediaDevices []string
 
 	// Check for CD-ROM devices in the VM spec
-	devices, found, err := unstructured.NestedMap(vm.Object, "spec", "template", "spec", "domain", "devices")
-	if err == nil && found {
-		if disks, found := devices["disks"].([]interface{}); found {
-			for _, disk := range disks {
-				if diskMap, ok := disk.(map[string]interface{}); ok {
-					if diskName, found := diskMap["name"].(string); found {
-						// Check if this is a CD-ROM device
-						if cdrom, found := diskMap["cdrom"]; found && cdrom != nil {
-							// Check if media is inserted (has volumeName)
-							if volumeName, found := diskMap["volumeName"].(string); found && volumeName != "" {
-								logger.Debug("Found CD-ROM device %s with inserted media (volume: %s) for VM %s/%s", diskName, volumeName, namespace, name)
-							} else {
-								logger.Debug("Found empty CD-ROM device %s for VM %s/%s", diskName, namespace, name)
-							}
-							mediaDevices = append(mediaDevices, diskName)
-						}
-					}
-				}
-			}
+	if vm.Spec.Template == nil {
+		return mediaDevices, nil
+	}
+
+	for _, disk := range vm.Spec.Template.Spec.Domain.Devices.Disks {
+		// Check if this is a CD-ROM device
+		if disk.CDRom != nil {
+			logger.Debug("Found CD-ROM device %s for VM %s/%s", disk.Name, namespace, name)
+			mediaDevices = append(mediaDevices, disk.Name)
 		}
 	}
 
@@ -1311,29 +1338,18 @@ func (c *Client) IsVirtualMediaInserted(namespace, name, mediaID string) (bool, 
 		return false, fmt.Errorf("failed to get VM %s: %w", name, err)
 	}
 
-	// Step 1: Find the CD-ROM device in the VM spec
-	var volumeRef string
-	devices, found, err := unstructured.NestedMap(vm.Object, "spec", "template", "spec", "domain", "devices")
-	if err != nil || !found {
-		logger.Debug("No devices found in VM %s/%s", namespace, name)
+	if vm.Spec.Template == nil {
+		logger.Debug("No template found in VM %s/%s", namespace, name)
 		return false, nil
 	}
 
-	if disks, found := devices["disks"].([]interface{}); found {
-		for _, disk := range disks {
-			if diskMap, ok := disk.(map[string]interface{}); ok {
-				if diskName, found := diskMap["name"].(string); found && diskName == mediaID {
-					// Check if this is a CD-ROM device
-					if cdrom, found := diskMap["cdrom"]; found && cdrom != nil {
-						if vol, ok := diskMap["volumeName"].(string); ok && vol != "" {
-							volumeRef = vol
-						} else {
-							volumeRef = diskName
-						}
-						break
-					}
-				}
-			}
+	// Step 1: Find the CD-ROM device in the VM spec
+	var volumeRef string
+	for _, disk := range vm.Spec.Template.Spec.Domain.Devices.Disks {
+		if disk.Name == mediaID && disk.CDRom != nil {
+			// The disk name is the volume reference
+			volumeRef = disk.Name
+			break
 		}
 	}
 
@@ -1344,22 +1360,12 @@ func (c *Client) IsVirtualMediaInserted(namespace, name, mediaID string) (bool, 
 
 	// Step 2: Find the corresponding volume for the CD-ROM
 	var pvcName string
-	volumes, found, err := unstructured.NestedSlice(vm.Object, "spec", "template", "spec", "volumes")
-	if err != nil || !found {
-		logger.Debug("No volumes found in VM %s/%s", namespace, name)
-		return false, nil
-	}
-
-	for _, volume := range volumes {
-		if volumeMap, ok := volume.(map[string]interface{}); ok {
-			if volumeName, found := volumeMap["name"].(string); found && volumeName == volumeRef {
-				// Step 3: Get PVC name from persistentVolumeClaim.claimName
-				if pvc, found := volumeMap["persistentVolumeClaim"].(map[string]interface{}); found {
-					if claimName, found := pvc["claimName"].(string); found {
-						pvcName = claimName
-						break
-					}
-				}
+	for _, volume := range vm.Spec.Template.Spec.Volumes {
+		if volume.Name == volumeRef {
+			// Get PVC name from persistentVolumeClaim.claimName
+			if volume.PersistentVolumeClaim != nil {
+				pvcName = volume.PersistentVolumeClaim.ClaimName
+				break
 			}
 		}
 	}
@@ -1535,81 +1541,65 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 
 		vmCopy := vm.DeepCopy()
 
-		devices, found, err := unstructured.NestedMap(vmCopy.Object, "spec", "template", "spec", "domain", "devices")
-		if err != nil || !found {
-			logger.Debug("DEBUG: No devices found in VM, creating new devices map")
-			devices = map[string]interface{}{}
+		// Ensure template exists
+		if vmCopy.Spec.Template == nil {
+			vmCopy.Spec.Template = &kubevirtv1.VirtualMachineInstanceTemplateSpec{}
 		}
 
-		var disks []interface{}
-		if existingDisks, found := devices["disks"].([]interface{}); found {
-			disks = existingDisks
-			logger.Debug("DEBUG: Found %d existing disks in VM", len(disks))
-		} else {
-			logger.Debug("DEBUG: No existing disks found, creating new disks slice")
-		}
-
-		var diskExists bool
-		var existingDiskIndex int
-		for i, disk := range disks {
-			if diskMap, ok := disk.(map[string]interface{}); ok {
-				if diskName, found := diskMap["name"].(string); found && diskName == deviceName {
-					diskExists = true
-					existingDiskIndex = i
-					logger.Debug("DEBUG: Found existing disk %s at index %d", deviceName, i)
-					break
-				}
+		// Check if disk already exists
+		diskExists := false
+		existingDiskIndex := -1
+		for i, disk := range vmCopy.Spec.Template.Spec.Domain.Devices.Disks {
+			if disk.Name == deviceName {
+				diskExists = true
+				existingDiskIndex = i
+				logger.Debug("DEBUG: Found existing disk %s at index %d", deviceName, i)
+				break
 			}
 		}
 
 		if diskExists {
-			if diskMap, ok := disks[existingDiskIndex].(map[string]interface{}); ok {
-				// Ensure the CD-ROM device is connected to the PVC
-				diskMap["volumeName"] = deviceName
-				logger.Info("Updated existing CD-ROM device %s to connect to PVC", deviceName)
-				logger.Debug("DEBUG: Updated existing CD-ROM device %s, connected to volume %s", deviceName, deviceName)
-			}
+			// Disk already exists, no need to add
+			logger.Info("CD-ROM device %s already exists", deviceName)
+			logger.Debug("DEBUG: CD-ROM device %s already exists at index %d", deviceName, existingDiskIndex)
 		} else {
-			newDisk := map[string]interface{}{
-				"name":       deviceName,
-				"volumeName": deviceName, // Connect to the volume
-				"cdrom": map[string]interface{}{
-					"bus": "sata",
+			// Add new CD-ROM disk
+			newDisk := kubevirtv1.Disk{
+				Name: deviceName,
+				DiskDevice: kubevirtv1.DiskDevice{
+					CDRom: &kubevirtv1.CDRomTarget{
+						Bus: kubevirtv1.DiskBusSATA,
+					},
 				},
 			}
-			disks = append(disks, newDisk)
-			logger.Info("Added new CD-ROM device %s connected to PVC", deviceName)
-			logger.Debug("DEBUG: Added new CD-ROM device %s connected to volume %s", deviceName, deviceName)
-		}
-		devices["disks"] = disks
-
-		var volumes []interface{}
-		if existingVolumes, found, err := unstructured.NestedSlice(vmCopy.Object, "spec", "template", "spec", "volumes"); err == nil && found {
-			volumes = existingVolumes
-			logger.Debug("DEBUG: Found %d existing volumes in VM", len(volumes))
-		} else {
-			logger.Debug("DEBUG: No existing volumes found, creating new volumes slice")
+			vmCopy.Spec.Template.Spec.Domain.Devices.Disks = append(vmCopy.Spec.Template.Spec.Domain.Devices.Disks, newDisk)
+			logger.Info("Added new CD-ROM device %s", deviceName)
+			logger.Debug("DEBUG: Added new CD-ROM device %s", deviceName)
 		}
 
-		var volumeExists bool
-		for _, volume := range volumes {
-			if volumeMap, ok := volume.(map[string]interface{}); ok {
-				if volumeName, found := volumeMap["name"].(string); found && volumeName == deviceName {
-					volumeExists = true
-					logger.Debug("DEBUG: Found existing volume %s", deviceName)
-					break
-				}
+		// Check if volume already exists
+		volumeExists := false
+		for _, volume := range vmCopy.Spec.Template.Spec.Volumes {
+			if volume.Name == deviceName {
+				volumeExists = true
+				logger.Debug("DEBUG: Found existing volume %s", deviceName)
+				break
 			}
 		}
 
 		if !volumeExists {
-			newVolume := map[string]interface{}{
-				"name": deviceName,
-				"persistentVolumeClaim": map[string]interface{}{
-					"claimName": dataVolumeName,
+			// Add new volume referencing the PVC
+			newVolume := kubevirtv1.Volume{
+				Name: deviceName,
+				VolumeSource: kubevirtv1.VolumeSource{
+					PersistentVolumeClaim: &kubevirtv1.PersistentVolumeClaimVolumeSource{
+						PersistentVolumeClaimVolumeSource: corev1.PersistentVolumeClaimVolumeSource{
+							ClaimName: dataVolumeName,
+						},
+					},
 				},
 			}
-			volumes = append(volumes, newVolume)
+			vmCopy.Spec.Template.Spec.Volumes = append(vmCopy.Spec.Template.Spec.Volumes, newVolume)
 			logger.Info("Added new volume reference %s for PVC %s", deviceName, dataVolumeName)
 			logger.Debug("DEBUG: Added new volume reference %s for PVC %s", deviceName, dataVolumeName)
 		} else {
@@ -1617,16 +1607,11 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 			logger.Debug("DEBUG: Volume reference %s already exists", deviceName)
 		}
 
-		err = unstructured.SetNestedSlice(vmCopy.Object, volumes, "spec", "template", "spec", "volumes")
+		// Convert to unstructured for dynamic client update
+		vmUnstructured, err := vmToUnstructured(vmCopy)
 		if err != nil {
-			logger.Debug("DEBUG: Failed to update VM volumes: %v", err)
-			return fmt.Errorf("failed to update VM volumes: %w", err)
-		}
-
-		err = unstructured.SetNestedMap(vmCopy.Object, devices, "spec", "template", "spec", "domain", "devices")
-		if err != nil {
-			logger.Debug("DEBUG: Failed to update VM devices: %v", err)
-			return fmt.Errorf("failed to update VM devices: %w", err)
+			logger.Debug("DEBUG: Failed to convert VM to unstructured: %v", err)
+			return fmt.Errorf("failed to convert VM to unstructured: %w", err)
 		}
 
 		gvrVM := schema.GroupVersionResource{
@@ -1636,7 +1621,7 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 		}
 
 		logger.Debug("DEBUG: Updating VM %s/%s with new CD-ROM device", namespace, name)
-		_, err = c.dynamicClient.Resource(gvrVM).Namespace(namespace).Update(ctx, vmCopy, metav1.UpdateOptions{})
+		_, err = c.dynamicClient.Resource(gvrVM).Namespace(namespace).Update(ctx, vmUnstructured, metav1.UpdateOptions{})
 		if err != nil {
 			if strings.Contains(err.Error(), "the object has been modified") && attempt < maxRetries {
 				logger.Info("Concurrent modification detected, retrying VM update (attempt %d/%d)", attempt, maxRetries)
@@ -1672,7 +1657,7 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 					corev1.ReadWriteOnce,
 				},
 				VolumeMode: &volumeMode,
-				Resources: corev1.ResourceRequirements{
+				Resources: corev1.VolumeResourceRequirements{
 					Requests: corev1.ResourceList{
 						"storage": resourceMustParse(storageSize),
 					},
@@ -1794,7 +1779,7 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 					corev1.ReadWriteOnce,
 				},
 				VolumeMode: &volumeMode,
-				Resources: corev1.ResourceRequirements{
+				Resources: corev1.VolumeResourceRequirements{
 					Requests: corev1.ResourceList{
 						"storage": resourceMustParse(storageSize),
 					},
@@ -2325,6 +2310,12 @@ func (c *Client) SetBootOrder(namespace, name, bootTarget string) error {
 		return err
 	}
 
+	// Convert to unstructured for dynamic client update
+	vmUnstructured, err := vmToUnstructured(vmCopy)
+	if err != nil {
+		return fmt.Errorf("failed to convert VM to unstructured: %w", err)
+	}
+
 	// Update VM
 	gvr := schema.GroupVersionResource{
 		Group:    "kubevirt.io",
@@ -2332,7 +2323,7 @@ func (c *Client) SetBootOrder(namespace, name, bootTarget string) error {
 		Resource: "virtualmachines",
 	}
 
-	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).Update(ctx, vmCopy, metav1.UpdateOptions{})
+	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).Update(ctx, vmUnstructured, metav1.UpdateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to update VM boot order: %w", err)
 	}
@@ -2341,87 +2332,69 @@ func (c *Client) SetBootOrder(namespace, name, bootTarget string) error {
 	return nil
 }
 
-func (*Client) modifyVmBootOrder(vmCopy *unstructured.Unstructured, bootTarget string) error {
+func (*Client) modifyVmBootOrder(vmCopy *kubevirtv1.VirtualMachine, bootTarget string) error {
 	const (
 		HDD   = "hdd"
 		CDROM = "cd"
 	)
 
+	if vmCopy.Spec.Template == nil {
+		return nil
+	}
+
+	// Collect current volumes and detect their type
 	volumeTypes := map[string]string{}
 	cdsFound := 0
-	if volumesList, found, err := unstructured.NestedSlice(vmCopy.Object, "spec", "template", "spec", "volumes"); err == nil && found {
-		// Collect current boot devices
+	for _, volume := range vmCopy.Spec.Template.Spec.Volumes {
+		volumeName := volume.Name
 
-		for _, volumeEntry := range volumesList {
-			if volume, found := volumeEntry.(map[string]interface{}); found {
-				volumeName, found := volume["name"].(string)
-				if !found {
-					continue
-				}
+		// Heuristic for catching autoimported cdroms
+		if strings.HasPrefix(volumeName, "cdrom") {
+			cdsFound++
+			volumeTypes[volumeName] = CDROM
+			continue
+		}
 
-				// Heuristic for catching autoimported cdroms
-				if strings.HasPrefix(volumeName, "cdrom") {
-					cdsFound += 1
-					volumeTypes[volumeName] = CDROM
-					continue
-				}
-
-				// Two basic disk types are recognized
-				// dataVolume and containerDisk
-				if _, ok := volume["dataVolume"]; ok {
-					volumeTypes[volumeName] = HDD
-				}
-				if _, ok := volume["containerDisk"]; ok {
-					volumeTypes[volumeName] = HDD
-				}
-			}
+		// Two basic disk types are recognized: dataVolume and containerDisk
+		if volume.DataVolume != nil {
+			volumeTypes[volumeName] = HDD
+		}
+		if volume.ContainerDisk != nil {
+			volumeTypes[volumeName] = HDD
 		}
 	}
 
-	// Get current devices
-	devices, found, err := unstructured.NestedMap(vmCopy.Object, "spec", "template", "spec", "domain", "devices")
-	if err == nil && found {
-		// Update disk boot order
-		if disks, found := devices["disks"].([]interface{}); found {
-			// Collect current boot devices
-			nextBootOrderPrimary := 1
-			nextBootOrderSecondary := 1
-			for i, disk := range disks {
-				if diskMap, ok := disk.(map[string]interface{}); ok {
-					if diskName, found := diskMap["name"].(string); found {
-						if volType, found := volumeTypes[diskName]; found && volType == CDROM && bootTarget == "Cd" {
-							// Set CD-ROMs as primary boot devices
-							diskMap["bootOrder"] = int64(nextBootOrderPrimary)
-							logger.Info("Set CD-ROM %s as primary boot device (order: %d)", diskName, nextBootOrderPrimary)
-							nextBootOrderPrimary += 1
-						} else if volType, found := volumeTypes[diskName]; found && volType == HDD && bootTarget == "Hdd" {
-							// Set disk as primary boot device
-							diskMap["bootOrder"] = int64(nextBootOrderPrimary)
-							logger.Info("Set disk %s as primary boot device (order: %d)", diskName, nextBootOrderPrimary)
-							nextBootOrderPrimary += 1
-						} else if volType, found := volumeTypes[diskName]; found && volType == HDD && bootTarget == "Cd" {
-							// Set main disk as secondary boot device
-							diskMap["bootOrder"] = int64(cdsFound + nextBootOrderSecondary)
-							logger.Info("Set disk %s as secondary boot device (order: %d)", diskName, cdsFound+nextBootOrderSecondary)
-							nextBootOrderSecondary += 1
-						} else {
-							// All other devices should have their boot order removed
-							delete(diskMap, "bootOrder")
-						}
-					}
-				}
-				// Update the disk in the slice
-				disks[i] = disk
-			}
-			devices["disks"] = disks
-		}
+	// Update disk boot order
+	nextBootOrderPrimary := uint(1)
+	nextBootOrderSecondary := uint(1)
+	for i := range vmCopy.Spec.Template.Spec.Domain.Devices.Disks {
+		disk := &vmCopy.Spec.Template.Spec.Domain.Devices.Disks[i]
+		diskName := disk.Name
 
-		// Update devices in VM
-		err = unstructured.SetNestedMap(vmCopy.Object, devices, "spec", "template", "spec", "domain", "devices")
-		if err != nil {
-			return fmt.Errorf("failed to update VM devices: %w", err)
+		if volType, found := volumeTypes[diskName]; found && volType == CDROM && bootTarget == "Cd" {
+			// Set CD-ROMs as primary boot devices
+			bootOrder := nextBootOrderPrimary
+			disk.BootOrder = &bootOrder
+			logger.Info("Set CD-ROM %s as primary boot device (order: %d)", diskName, nextBootOrderPrimary)
+			nextBootOrderPrimary++
+		} else if volType, found := volumeTypes[diskName]; found && volType == HDD && bootTarget == "Hdd" {
+			// Set disk as primary boot device
+			bootOrder := nextBootOrderPrimary
+			disk.BootOrder = &bootOrder
+			logger.Info("Set disk %s as primary boot device (order: %d)", diskName, nextBootOrderPrimary)
+			nextBootOrderPrimary++
+		} else if volType, found := volumeTypes[diskName]; found && volType == HDD && bootTarget == "Cd" {
+			// Set main disk as secondary boot device
+			bootOrder := uint(cdsFound) + nextBootOrderSecondary
+			disk.BootOrder = &bootOrder
+			logger.Info("Set disk %s as secondary boot device (order: %d)", diskName, uint(cdsFound)+nextBootOrderSecondary)
+			nextBootOrderSecondary++
+		} else {
+			// All other devices should have their boot order removed
+			disk.BootOrder = nil
 		}
 	}
+
 	return nil
 }
 
@@ -2453,6 +2426,12 @@ func (c *Client) SetBootOnce(namespace, name, bootTarget string) error {
 
 	vmCopy.SetAnnotations(annotations)
 
+	// Convert to unstructured for dynamic client update
+	vmUnstructured, err := vmToUnstructured(vmCopy)
+	if err != nil {
+		return fmt.Errorf("failed to convert VM to unstructured: %w", err)
+	}
+
 	// Update VM
 	gvr := schema.GroupVersionResource{
 		Group:    "kubevirt.io",
@@ -2460,7 +2439,7 @@ func (c *Client) SetBootOnce(namespace, name, bootTarget string) error {
 		Resource: "virtualmachines",
 	}
 
-	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).Update(ctx, vmCopy, metav1.UpdateOptions{})
+	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).Update(ctx, vmUnstructured, metav1.UpdateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to update VM boot once configuration: %w", err)
 	}
@@ -2483,76 +2462,56 @@ func (c *Client) EjectVirtualMedia(namespace, name, mediaID string) error {
 		return fmt.Errorf("failed to get VM %s: %w", name, err)
 	}
 
-	logger.Debug("Current VM spec before ejection: %v", vm.Object)
+	logger.Debug("Current VM spec before ejection")
 
 	// Update VM to remove CD-ROM disk and volume reference
 	vmCopy := vm.DeepCopy()
 
-	// Get current disks and remove the specified disk
-	devices, found, err := unstructured.NestedMap(vmCopy.Object, "spec", "template", "spec", "domain", "devices")
-	if err != nil || !found {
-		logger.Warning("No devices found in VM %s/%s when trying to eject media %s", namespace, name, mediaID)
-		return fmt.Errorf("no devices found in VM")
+	if vmCopy.Spec.Template == nil {
+		logger.Warning("No template found in VM %s/%s when trying to eject media %s", namespace, name, mediaID)
+		return fmt.Errorf("no template found in VM")
 	}
 
-	// Get current disks list and remove the specified disk
-	var disks []interface{}
-	var foundDisk bool
-	if existingDisks, found := devices["disks"].([]interface{}); found {
-		for _, disk := range existingDisks {
-			if diskMap, ok := disk.(map[string]interface{}); ok {
-				if diskName, found := diskMap["name"].(string); found {
-					if diskName != mediaID {
-						disks = append(disks, disk)
-					} else {
-						logger.Info("Removing CD-ROM device %s from VM spec", mediaID)
-						foundDisk = true
-					}
-				}
-			}
+	// Remove the specified disk from disks list
+	var newDisks []kubevirtv1.Disk
+	foundDisk := false
+	for _, disk := range vmCopy.Spec.Template.Spec.Domain.Devices.Disks {
+		if disk.Name != mediaID {
+			newDisks = append(newDisks, disk)
+		} else {
+			logger.Info("Removing CD-ROM device %s from VM spec", mediaID)
+			foundDisk = true
 		}
 	}
 	if !foundDisk {
 		logger.Warning("CD-ROM device %s not found in VM %s/%s disks list during ejection", mediaID, namespace, name)
 	}
-	devices["disks"] = disks
+	vmCopy.Spec.Template.Spec.Domain.Devices.Disks = newDisks
 
-	// Get current volumes and remove the volume reference
-	var volumes []interface{}
-	var foundVolume bool
-	if existingVolumes, found, err := unstructured.NestedSlice(vmCopy.Object, "spec", "template", "spec", "volumes"); err == nil && found {
-		for _, volume := range existingVolumes {
-			if volumeMap, ok := volume.(map[string]interface{}); ok {
-				if volumeName, found := volumeMap["name"].(string); found {
-					if volumeName != mediaID {
-						volumes = append(volumes, volume)
-					} else {
-						logger.Info("Removing volume reference %s from VM spec", mediaID)
-						foundVolume = true
-					}
-				}
-			}
+	// Remove the volume reference
+	var newVolumes []kubevirtv1.Volume
+	foundVolume := false
+	for _, volume := range vmCopy.Spec.Template.Spec.Volumes {
+		if volume.Name != mediaID {
+			newVolumes = append(newVolumes, volume)
+		} else {
+			logger.Info("Removing volume reference %s from VM spec", mediaID)
+			foundVolume = true
 		}
 	}
 	if !foundVolume {
 		logger.Warning("Volume reference %s not found in VM %s/%s during ejection", mediaID, namespace, name)
 	}
+	vmCopy.Spec.Template.Spec.Volumes = newVolumes
 
-	// Update volumes in VM
-	err = unstructured.SetNestedSlice(vmCopy.Object, volumes, "spec", "template", "spec", "volumes")
+	// Convert to unstructured for dynamic client update
+	vmUnstructured, err := vmToUnstructured(vmCopy)
 	if err != nil {
-		logger.Error("Failed to update VM volumes for %s/%s: %v", namespace, name, err)
-		return fmt.Errorf("failed to update VM volumes: %w", err)
+		logger.Error("Failed to convert VM to unstructured for %s/%s: %v", namespace, name, err)
+		return fmt.Errorf("failed to convert VM to unstructured: %w", err)
 	}
 
-	// Update devices in VM
-	err = unstructured.SetNestedMap(vmCopy.Object, devices, "spec", "template", "spec", "domain", "devices")
-	if err != nil {
-		logger.Error("Failed to update VM devices for %s/%s: %v", namespace, name, err)
-		return fmt.Errorf("failed to update VM devices: %w", err)
-	}
-
-	logger.Debug("VM spec after removing CD-ROM and volume: %v", vmCopy.Object)
+	logger.Debug("VM spec after removing CD-ROM and volume")
 
 	// Update VM
 	gvr := schema.GroupVersionResource{
@@ -2561,7 +2520,7 @@ func (c *Client) EjectVirtualMedia(namespace, name, mediaID string) error {
 		Resource: "virtualmachines",
 	}
 
-	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).Update(ctx, vmCopy, metav1.UpdateOptions{})
+	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).Update(ctx, vmUnstructured, metav1.UpdateOptions{})
 	if err != nil {
 		logger.Error("Failed to update VM %s/%s after removing CD-ROM and volume: %v", namespace, name, err)
 		return fmt.Errorf("failed to update VM: %w", err)
@@ -2635,13 +2594,14 @@ func (c *Client) GetVMMemory(namespace, name string) (float64, error) {
 		return 2.0, nil // Low default fallback
 	}
 
-	// Get memory from VM spec
-	memory, found, err := unstructured.NestedString(vm.Object, "spec", "template", "spec", "domain", "memory", "guest")
-	if err != nil || !found {
+	// Get memory from VM spec using typed API
+	if vm.Spec.Template == nil || vm.Spec.Template.Spec.Domain.Memory == nil ||
+		vm.Spec.Template.Spec.Domain.Memory.Guest == nil {
 		logger.Warning("Memory not found in VM spec for %s/%s, using default 2.0 GB", namespace, name)
 		return 2.0, nil // Low default fallback
 	}
 
+	memory := vm.Spec.Template.Spec.Domain.Memory.Guest.String()
 	logger.Debug("Found memory spec for %s/%s: %s", namespace, name, memory)
 
 	// Parse memory string (e.g., "48Gi" -> 48.0)
@@ -2672,10 +2632,15 @@ func (c *Client) GetVMCPU(namespace, name string) (int, error) {
 		return 1, nil // Low default fallback
 	}
 
-	// Get CPU cores from VM spec
-	cpuCores, found, err := unstructured.NestedInt64(vm.Object, "spec", "template", "spec", "domain", "cpu", "cores")
-	if err != nil || !found {
+	// Get CPU cores from VM spec using typed API
+	if vm.Spec.Template == nil || vm.Spec.Template.Spec.Domain.CPU == nil {
 		logger.Warning("CPU cores not found in VM spec for %s/%s, using default 1 core", namespace, name)
+		return 1, nil // Low default fallback
+	}
+
+	cpuCores := vm.Spec.Template.Spec.Domain.CPU.Cores
+	if cpuCores == 0 {
+		logger.Warning("CPU cores is 0 in VM spec for %s/%s, using default 1 core", namespace, name)
 		return 1, nil // Low default fallback
 	}
 
@@ -2695,58 +2660,42 @@ func (c *Client) GetVMStorageDetails(namespace, name string) (map[string]interfa
 		"volumes":         []map[string]interface{}{},
 	}
 
-	// Get DataVolume templates for storage capacity
-	dataVolumeTemplates, found, err := unstructured.NestedSlice(vm.Object, "spec", "dataVolumeTemplates")
-	if err == nil && found {
-		totalCapacity := 0.0
-		var volumes []map[string]interface{}
+	// Get DataVolume templates for storage capacity using typed API
+	totalCapacity := 0.0
+	var volumes []map[string]interface{}
 
-		for _, dv := range dataVolumeTemplates {
-			if dvMap, ok := dv.(map[string]interface{}); ok {
-				// Get volume name
-				volumeName := ""
-				if metadata, found := dvMap["metadata"].(map[string]interface{}); found {
-					if name, found := metadata["name"].(string); found {
-						volumeName = name
+	for _, dv := range vm.Spec.DataVolumeTemplates {
+		volumeName := dv.Name
+		capacity := 0.0
+
+		// Get storage capacity from DataVolume spec
+		if dv.Spec.Storage != nil && dv.Spec.Storage.Resources.Requests != nil {
+			if storageQty, found := dv.Spec.Storage.Resources.Requests["storage"]; found {
+				storageStr := storageQty.String()
+				// Parse storage string (e.g., "120Gi" -> 120.0)
+				if strings.HasSuffix(storageStr, "Gi") {
+					capacityStr := strings.TrimSuffix(storageStr, "Gi")
+					if capacityGB, err := strconv.ParseFloat(capacityStr, 64); err == nil {
+						capacity = capacityGB
+					}
+				} else if strings.HasSuffix(storageStr, "Mi") {
+					capacityStr := strings.TrimSuffix(storageStr, "Mi")
+					if capacityMB, err := strconv.ParseFloat(capacityStr, 64); err == nil {
+						capacity = capacityMB / 1024.0
 					}
 				}
-
-				// Get storage capacity
-				capacity := 0.0
-				if spec, found := dvMap["spec"].(map[string]interface{}); found {
-					if storage, found := spec["storage"].(map[string]interface{}); found {
-						if resources, found := storage["resources"].(map[string]interface{}); found {
-							if requests, found := resources["requests"].(map[string]interface{}); found {
-								if storageStr, found := requests["storage"].(string); found {
-									// Parse storage string (e.g., "120Gi" -> 120.0)
-									if strings.HasSuffix(storageStr, "Gi") {
-										capacityStr := strings.TrimSuffix(storageStr, "Gi")
-										if capacityGB, err := strconv.ParseFloat(capacityStr, 64); err == nil {
-											capacity = capacityGB
-										}
-									} else if strings.HasSuffix(storageStr, "Mi") {
-										capacityStr := strings.TrimSuffix(storageStr, "Mi")
-										if capacityMB, err := strconv.ParseFloat(capacityStr, 64); err == nil {
-											capacity = capacityMB / 1024.0
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-
-				totalCapacity += capacity
-				volumes = append(volumes, map[string]interface{}{
-					"name":     volumeName,
-					"capacity": capacity,
-				})
 			}
 		}
 
-		storageInfo["totalCapacityGB"] = totalCapacity
-		storageInfo["volumes"] = volumes
+		totalCapacity += capacity
+		volumes = append(volumes, map[string]interface{}{
+			"name":     volumeName,
+			"capacity": capacity,
+		})
 	}
+
+	storageInfo["totalCapacityGB"] = totalCapacity
+	storageInfo["volumes"] = volumes
 
 	return storageInfo, nil
 }
@@ -2760,39 +2709,28 @@ func (c *Client) GetVMNetworkDetails(namespace, name string) ([]map[string]inter
 
 	var interfaces []map[string]interface{}
 
-	// Get network interfaces from VM spec
-	devices, found, err := unstructured.NestedMap(vm.Object, "spec", "template", "spec", "domain", "devices")
-	if err == nil && found {
-		if networkInterfaces, found := devices["interfaces"].([]interface{}); found {
-			for _, iface := range networkInterfaces {
-				if ifaceMap, ok := iface.(map[string]interface{}); ok {
-					interfaceInfo := map[string]interface{}{
-						"name": "",
-						"mac":  "",
-						"type": "bridge",
-					}
+	if vm.Spec.Template == nil {
+		return interfaces, nil
+	}
 
-					if name, found := ifaceMap["name"].(string); found {
-						interfaceInfo["name"] = name
-					}
-
-					if macAddress, found := ifaceMap["macAddress"].(string); found {
-						interfaceInfo["mac"] = macAddress
-					}
-
-					// Determine interface type
-					if _, found := ifaceMap["bridge"]; found {
-						interfaceInfo["type"] = "bridge"
-					} else if _, found := ifaceMap["masquerade"]; found {
-						interfaceInfo["type"] = "masquerade"
-					} else if _, found := ifaceMap["sriov"]; found {
-						interfaceInfo["type"] = "sriov"
-					}
-
-					interfaces = append(interfaces, interfaceInfo)
-				}
-			}
+	// Get network interfaces from VM spec using typed API
+	for _, iface := range vm.Spec.Template.Spec.Domain.Devices.Interfaces {
+		interfaceInfo := map[string]interface{}{
+			"name": iface.Name,
+			"mac":  iface.MacAddress,
+			"type": "bridge",
 		}
+
+		// Determine interface type
+		if iface.Bridge != nil {
+			interfaceInfo["type"] = "bridge"
+		} else if iface.Masquerade != nil {
+			interfaceInfo["type"] = "masquerade"
+		} else if iface.SRIOV != nil {
+			interfaceInfo["type"] = "sriov"
+		}
+
+		interfaces = append(interfaces, interfaceInfo)
 	}
 
 	return interfaces, nil
