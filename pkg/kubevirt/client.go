@@ -59,6 +59,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	kubevirtv1 "kubevirt.io/api/core/v1"
+	cdiv1beta1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
 )
 
 // VMSelectorConfig defines how to select VMs for a chassis
@@ -84,10 +85,12 @@ type Client struct {
 	}
 }
 
-// init registers KubeVirt types with the runtime scheme for conversion
+// init registers KubeVirt and CDI types with the runtime scheme for conversion
 func init() {
 	// Register KubeVirt types with the scheme for runtime conversion
 	_ = kubevirtv1.AddToScheme(scheme.Scheme)
+	// Register CDI types with the scheme for runtime conversion
+	_ = cdiv1beta1.AddToScheme(scheme.Scheme)
 }
 
 // unstructuredToVM converts an unstructured object to a typed VirtualMachine
@@ -115,6 +118,25 @@ func vmToUnstructured(vm *kubevirtv1.VirtualMachine) (*unstructured.Unstructured
 	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(vm)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert VirtualMachine to unstructured: %w", err)
+	}
+	return &unstructured.Unstructured{Object: obj}, nil
+}
+
+// unstructuredToDataVolume converts an unstructured object to a typed DataVolume
+func unstructuredToDataVolume(u *unstructured.Unstructured) (*cdiv1beta1.DataVolume, error) {
+	dv := &cdiv1beta1.DataVolume{}
+	err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, dv)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert unstructured to DataVolume: %w", err)
+	}
+	return dv, nil
+}
+
+// volumeImportSourceToUnstructured converts a typed VolumeImportSource to an unstructured object
+func volumeImportSourceToUnstructured(vis *cdiv1beta1.VolumeImportSource) (*unstructured.Unstructured, error) {
+	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(vis)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert VolumeImportSource to unstructured: %w", err)
 	}
 	return &unstructured.Unstructured{Object: obj}, nil
 }
@@ -1730,29 +1752,34 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 		logger.Info("Using CDI HTTP import for ISO")
 		volumeImportSourceName := sanitizeResourceName(fmt.Sprintf("%s-populator", dataVolumeName))
 		logger.Debug("DEBUG: Generated volumeImportSourceName=%s", volumeImportSourceName)
-		volumeImportSource := &unstructured.Unstructured{
-			Object: map[string]interface{}{
-				"apiVersion": "cdi.kubevirt.io/v1beta1",
-				"kind":       "VolumeImportSource",
-				"metadata": map[string]interface{}{
-					"name":      volumeImportSourceName,
-					"namespace": namespace,
-				},
-				"spec": map[string]interface{}{
-					"source": map[string]interface{}{
-						"http": map[string]interface{}{
-							"url": imageURL,
-						},
+
+		// Create typed VolumeImportSource
+		volumeImportSource := &cdiv1beta1.VolumeImportSource{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      volumeImportSourceName,
+				Namespace: namespace,
+			},
+			Spec: cdiv1beta1.VolumeImportSourceSpec{
+				Source: &cdiv1beta1.ImportSourceType{
+					HTTP: &cdiv1beta1.DataVolumeSourceHTTP{
+						URL: imageURL,
 					},
 				},
 			},
 		}
+
+		// Convert to unstructured for dynamic client
+		visUnstructured, err := volumeImportSourceToUnstructured(volumeImportSource)
+		if err != nil {
+			return fmt.Errorf("failed to convert VolumeImportSource to unstructured: %w", err)
+		}
+
 		gvrVIS := schema.GroupVersionResource{
 			Group:    "cdi.kubevirt.io",
 			Version:  "v1beta1",
 			Resource: "volumeimportsources",
 		}
-		_, err := c.dynamicClient.Resource(gvrVIS).Namespace(namespace).Create(ctx, volumeImportSource, metav1.CreateOptions{})
+		_, err = c.dynamicClient.Resource(gvrVIS).Namespace(namespace).Create(ctx, visUnstructured, metav1.CreateOptions{})
 		if err != nil {
 			if strings.Contains(err.Error(), "already exists") {
 				logger.Info("VolumeImportSource %s already exists, reusing it", volumeImportSourceName)
@@ -2270,17 +2297,19 @@ func (c *Client) IsDataVolumeReady(namespace, name string) (bool, error) {
 		Resource: "datavolumes",
 	}
 
-	dv, err := c.dynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	dvUnstructured, err := c.dynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return false, fmt.Errorf("failed to get DataVolume %s: %w", name, err)
 	}
 
-	// Check if DataVolume is ready
-	if phase, found, err := unstructured.NestedString(dv.Object, "status", "phase"); err == nil && found {
-		return phase == "Succeeded", nil
+	// Convert to typed DataVolume
+	dv, err := unstructuredToDataVolume(dvUnstructured)
+	if err != nil {
+		return false, fmt.Errorf("failed to convert DataVolume %s: %w", name, err)
 	}
 
-	return false, nil
+	// Check if DataVolume is ready using typed phase constant
+	return dv.Status.Phase == cdiv1beta1.Succeeded, nil
 }
 
 // SetBootOrder sets the boot order for a VM to prioritize the selected device.
@@ -2808,25 +2837,31 @@ func (c *Client) cleanupExistingDataVolume(namespace, dataVolumeName string) err
 	}
 
 	// Check if DataVolume exists
-	dv, err := c.dynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, dataVolumeName, metav1.GetOptions{})
+	dvUnstructured, err := c.dynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, dataVolumeName, metav1.GetOptions{})
 	if err != nil {
 		// DataVolume doesn't exist, nothing to clean up
 		return nil
 	}
 
-	// Check if DataVolume is in a failed state
-	if phase, found, err := unstructured.NestedString(dv.Object, "status", "phase"); err == nil && found {
-		if phase == "ImportInProgress" || phase == "Failed" {
-			logger.Info("Cleaning up existing DataVolume %s in state %s", dataVolumeName, phase)
+	// Convert to typed DataVolume
+	dv, err := unstructuredToDataVolume(dvUnstructured)
+	if err != nil {
+		// If conversion fails, log and skip cleanup
+		logger.Warning("Failed to convert DataVolume %s for cleanup check: %v", dataVolumeName, err)
+		return nil
+	}
 
-			// Delete the DataVolume
-			err = c.dynamicClient.Resource(gvr).Namespace(namespace).Delete(ctx, dataVolumeName, metav1.DeleteOptions{})
-			if err != nil {
-				return fmt.Errorf("failed to delete existing DataVolume %s: %w", dataVolumeName, err)
-			}
+	// Check if DataVolume is in a failed or in-progress state using typed phase constants
+	if dv.Status.Phase == cdiv1beta1.ImportInProgress || dv.Status.Phase == cdiv1beta1.Failed {
+		logger.Info("Cleaning up existing DataVolume %s in state %s", dataVolumeName, dv.Status.Phase)
 
-			logger.Info("Successfully cleaned up existing DataVolume %s", dataVolumeName)
+		// Delete the DataVolume
+		err = c.dynamicClient.Resource(gvr).Namespace(namespace).Delete(ctx, dataVolumeName, metav1.DeleteOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to delete existing DataVolume %s: %w", dataVolumeName, err)
 		}
+
+		logger.Info("Successfully cleaned up existing DataVolume %s", dataVolumeName)
 	}
 
 	return nil
