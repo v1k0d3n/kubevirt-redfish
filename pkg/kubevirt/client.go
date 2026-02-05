@@ -70,7 +70,7 @@ type VMSelectorConfig struct {
 
 // Client represents a KubeVirt client for interacting with KubeVirt resources
 type Client struct {
-	kubernetesClient *kubernetes.Clientset
+	kubernetesClient kubernetes.Interface
 	dynamicClient    dynamic.Interface
 	config           *rest.Config
 	timeout          time.Duration
@@ -118,6 +118,15 @@ func vmToUnstructured(vm *kubevirtv1.VirtualMachine) (*unstructured.Unstructured
 	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(vm)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert VirtualMachine to unstructured: %w", err)
+	}
+	return &unstructured.Unstructured{Object: obj}, nil
+}
+
+// vmiToUnstructured converts a typed VirtualMachineInstance to an unstructured object
+func vmiToUnstructured(vmi *kubevirtv1.VirtualMachineInstance) (*unstructured.Unstructured, error) {
+	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(vmi)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert VirtualMachineInstance to unstructured: %w", err)
 	}
 	return &unstructured.Unstructured{Object: obj}, nil
 }
@@ -194,6 +203,31 @@ func NewClient(configPath string, timeout time.Duration, appConfig interface{}) 
 		appConfig:        appConfig,
 		httpClient:       httpClient,
 	}, nil
+}
+
+// NewClientWithClients creates a Client with provided Kubernetes clients.
+// This is useful for testing with mock/fake clients.
+func NewClientWithClients(
+	kubernetesClient kubernetes.Interface,
+	dynamicClient dynamic.Interface,
+	timeout time.Duration,
+	appConfig interface{},
+) *Client {
+	return &Client{
+		kubernetesClient: kubernetesClient,
+		dynamicClient:    dynamicClient,
+		timeout:          timeout,
+		appConfig:        appConfig,
+		config:           &rest.Config{},
+		httpClient: &http.Client{
+			Timeout: timeout,
+			Transport: &http.Transport{
+				MaxIdleConns:        100,
+				MaxIdleConnsPerHost: 10,
+				IdleConnTimeout:     90 * time.Second,
+			},
+		},
+	}
 }
 
 // trackOperation tracks the performance of an operation
@@ -743,9 +777,9 @@ func (c *Client) SetVMPowerState(namespace, name, state string) error {
 
 		// Force restart the VM by force stopping (with zero grace period) and starting
 		stopPatch := []byte(`[
-			 {"op": "replace", "path": "/spec/runStrategy", "value": "Halted"},
-			 {"op": "add", "path": "/metadata/annotations/kubevirt.io~1force-stop", "value": "true"},
-			 {"op": "replace", "path": "/spec/terminationGracePeriodSeconds", "value": 0}
+			 {"op": "replace", "path": "/spec/terminationGracePeriodSeconds", "value": 0},
+		     {"op": "replace", "path": "/spec/runStrategy", "value": "Halted"},
+			 {"op": "add", "path": "/metadata/annotations/kubevirt.io~1force-stop", "value": "true"}
 		 ]`)
 
 		// Debug: Log before making the stop API call
