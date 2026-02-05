@@ -1235,7 +1235,7 @@ func (c *Client) GetVMBootOptions(namespace, name string) (map[string]interface{
 	bootOptions := map[string]interface{}{
 		"bootSourceOverrideEnabled": "Disabled",
 		"bootSourceOverrideTarget":  "None",
-		"bootSourceOverrideMode":    "UEFI",
+		"bootSourceOverrideMode":    "Legacy",
 	}
 
 	// Check for firmware configuration
