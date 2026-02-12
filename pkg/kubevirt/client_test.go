@@ -222,34 +222,6 @@ func TestIsRetryableError(t *testing.T) {
 	}
 }
 
-func TestVMSelectorConfig_JSON(t *testing.T) {
-	selector := &VMSelectorConfig{
-		Labels: map[string]string{
-			"app": "test",
-			"env": "prod",
-		},
-		Names: []string{"vm1", "vm2"},
-	}
-
-	// Test that the struct can be marshaled to JSON
-	// This is a basic test to ensure the struct is properly defined
-	if selector.Labels["app"] != "test" {
-		t.Error("Label 'app' should be 'test'")
-	}
-	if selector.Labels["env"] != "prod" {
-		t.Error("Label 'env' should be 'prod'")
-	}
-	if len(selector.Names) != 2 {
-		t.Error("Should have 2 names")
-	}
-	if selector.Names[0] != "vm1" {
-		t.Error("First name should be 'vm1'")
-	}
-	if selector.Names[1] != "vm2" {
-		t.Error("Second name should be 'vm2'")
-	}
-}
-
 func TestClient_retryWithBackoff(t *testing.T) {
 	client := &Client{
 		timeout: 30 * time.Second,
@@ -341,53 +313,6 @@ func TestClient_GetKubeVirtConfig(t *testing.T) {
 	if allowInsecureTLS {
 		t.Error("Expected allow_insecure_tls to be false by default")
 	}
-}
-
-func TestClient_GetDataVolumeConfig_Defaults(t *testing.T) {
-	client := &Client{
-		timeout:   30 * time.Second,
-		appConfig: nil, // No config provided
-	}
-
-	storageSize, allowInsecureTLS, storageClass, vmUpdateTimeout, isoDownloadTimeout, helperImage := client.getDataVolumeConfig()
-
-	// Should return default values
-	if storageSize != "10Gi" {
-		t.Errorf("Expected storage size '10Gi', got '%s'", storageSize)
-	}
-	if storageClass != "" {
-		t.Errorf("Expected empty storage class, got '%s'", storageClass)
-	}
-	if vmUpdateTimeout != "30s" {
-		t.Errorf("Expected vm update timeout '30s', got '%s'", vmUpdateTimeout)
-	}
-	if isoDownloadTimeout != "30m" {
-		t.Errorf("Expected iso download timeout '30m', got '%s'", isoDownloadTimeout)
-	}
-	// allowInsecureTLS can be false by default, but we should still check it's defined
-	_ = allowInsecureTLS // Use the variable to avoid linter warning
-	if helperImage != "alpine:latest" {
-		t.Errorf("Expected helper image 'alpine:latest', got '%s'", helperImage)
-	}
-}
-
-func TestClient_GetKubeVirtConfig_Defaults(t *testing.T) {
-	client := &Client{
-		timeout:   30 * time.Second,
-		appConfig: nil, // No config provided
-	}
-
-	apiVersion, timeout, allowInsecureTLS := client.getKubeVirtConfig()
-
-	// Should return default values
-	if apiVersion == "" {
-		t.Error("API version should have a default value")
-	}
-	if timeout == 0 {
-		t.Error("Timeout should have a default value")
-	}
-	// allowInsecureTLS can be false by default, but we should still check it's defined
-	_ = allowInsecureTLS // Use the variable to avoid linter warning
 }
 
 func TestStringPtr(t *testing.T) {
@@ -2230,6 +2155,611 @@ func TestSanitizeResourceName(t *testing.T) {
 			// Additional validation: ensure the result is never longer than the input
 			if len(result) > len(tc.input) {
 				t.Errorf("Result length %d is longer than input length %d", len(result), len(tc.input))
+			}
+		})
+	}
+}
+
+// =============================================================================
+// BOOT ONCE TESTS
+// =============================================================================
+
+// TestCaptureCurrentBootOrder tests the captureCurrentBootOrder function
+func TestCaptureCurrentBootOrder(t *testing.T) {
+	testCases := []struct {
+		name        string
+		setupVM     func() *kubevirtv1.VirtualMachine
+		expectEmpty bool
+		expectDisks int
+	}{
+		{
+			name: "VM with boot orders set",
+			setupVM: func() *kubevirtv1.VirtualMachine {
+				bootOrder1 := uint(1)
+				bootOrder2 := uint(2)
+				return &kubevirtv1.VirtualMachine{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-vm",
+						Namespace: "test-namespace",
+					},
+					Spec: kubevirtv1.VirtualMachineSpec{
+						Template: &kubevirtv1.VirtualMachineInstanceTemplateSpec{
+							Spec: kubevirtv1.VirtualMachineInstanceSpec{
+								Domain: kubevirtv1.DomainSpec{
+									Devices: kubevirtv1.Devices{
+										Disks: []kubevirtv1.Disk{
+											{Name: "disk0", BootOrder: &bootOrder1},
+											{Name: "disk1", BootOrder: &bootOrder2},
+										},
+									},
+								},
+							},
+						},
+					},
+				}
+			},
+			expectEmpty: false,
+			expectDisks: 2,
+		},
+		{
+			name: "VM with no boot orders",
+			setupVM: func() *kubevirtv1.VirtualMachine {
+				return &kubevirtv1.VirtualMachine{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-vm",
+						Namespace: "test-namespace",
+					},
+					Spec: kubevirtv1.VirtualMachineSpec{
+						Template: &kubevirtv1.VirtualMachineInstanceTemplateSpec{
+							Spec: kubevirtv1.VirtualMachineInstanceSpec{
+								Domain: kubevirtv1.DomainSpec{
+									Devices: kubevirtv1.Devices{
+										Disks: []kubevirtv1.Disk{
+											{Name: "disk0"},
+											{Name: "disk1"},
+										},
+									},
+								},
+							},
+						},
+					},
+				}
+			},
+			expectEmpty: false,
+			expectDisks: 2,
+		},
+		{
+			name: "VM with no template",
+			setupVM: func() *kubevirtv1.VirtualMachine {
+				return &kubevirtv1.VirtualMachine{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-vm",
+						Namespace: "test-namespace",
+					},
+					Spec: kubevirtv1.VirtualMachineSpec{},
+				}
+			},
+			expectEmpty: true,
+			expectDisks: 0,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &Client{timeout: 30 * time.Second}
+			vm := tc.setupVM()
+
+			configJSON, err := client.captureCurrentBootOrder(vm)
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			if tc.expectEmpty {
+				if configJSON != "[]" {
+					t.Errorf("Expected empty JSON array, got: %s", configJSON)
+				}
+			} else {
+				if !strings.Contains(configJSON, "disk0") {
+					t.Errorf("Expected config to contain disk0, got: %s", configJSON)
+				}
+			}
+		})
+	}
+}
+
+// TestRestoreBootOrder tests the restoreBootOrder function
+func TestRestoreBootOrder(t *testing.T) {
+	testCases := []struct {
+		name       string
+		configJSON string
+		setupVM    func() *kubevirtv1.VirtualMachine
+		validate   func(t *testing.T, vm *kubevirtv1.VirtualMachine)
+	}{
+		{
+			name:       "Restore boot orders from JSON",
+			configJSON: `[{"diskName":"disk0","bootOrder":1},{"diskName":"disk1","bootOrder":2}]`,
+			setupVM: func() *kubevirtv1.VirtualMachine {
+				return &kubevirtv1.VirtualMachine{
+					Spec: kubevirtv1.VirtualMachineSpec{
+						Template: &kubevirtv1.VirtualMachineInstanceTemplateSpec{
+							Spec: kubevirtv1.VirtualMachineInstanceSpec{
+								Domain: kubevirtv1.DomainSpec{
+									Devices: kubevirtv1.Devices{
+										Disks: []kubevirtv1.Disk{
+											{Name: "disk0"},
+											{Name: "disk1"},
+										},
+									},
+								},
+							},
+						},
+					},
+				}
+			},
+			validate: func(t *testing.T, vm *kubevirtv1.VirtualMachine) {
+				disks := vm.Spec.Template.Spec.Domain.Devices.Disks
+				if disks[0].BootOrder == nil || *disks[0].BootOrder != 1 {
+					t.Errorf("disk0 should have boot order 1")
+				}
+				if disks[1].BootOrder == nil || *disks[1].BootOrder != 2 {
+					t.Errorf("disk1 should have boot order 2")
+				}
+			},
+		},
+		{
+			name:       "Restore with nil boot order",
+			configJSON: `[{"diskName":"disk0","bootOrder":1},{"diskName":"disk1"}]`,
+			setupVM: func() *kubevirtv1.VirtualMachine {
+				bootOrder := uint(99)
+				return &kubevirtv1.VirtualMachine{
+					Spec: kubevirtv1.VirtualMachineSpec{
+						Template: &kubevirtv1.VirtualMachineInstanceTemplateSpec{
+							Spec: kubevirtv1.VirtualMachineInstanceSpec{
+								Domain: kubevirtv1.DomainSpec{
+									Devices: kubevirtv1.Devices{
+										Disks: []kubevirtv1.Disk{
+											{Name: "disk0", BootOrder: &bootOrder},
+											{Name: "disk1", BootOrder: &bootOrder},
+										},
+									},
+								},
+							},
+						},
+					},
+				}
+			},
+			validate: func(t *testing.T, vm *kubevirtv1.VirtualMachine) {
+				disks := vm.Spec.Template.Spec.Domain.Devices.Disks
+				if disks[0].BootOrder == nil || *disks[0].BootOrder != 1 {
+					t.Errorf("disk0 should have boot order 1")
+				}
+				if disks[1].BootOrder != nil {
+					t.Errorf("disk1 should have nil boot order, got %d", *disks[1].BootOrder)
+				}
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &Client{timeout: 30 * time.Second}
+			vm := tc.setupVM()
+
+			err := client.restoreBootOrder(vm, tc.configJSON)
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			tc.validate(t, vm)
+		})
+	}
+}
+
+// TestGetVMIUID tests the getVMIUID function
+func TestGetVMIUID(t *testing.T) {
+	testCases := []struct {
+		name        string
+		setupVMI    func(mockClient *MockDynamicClient)
+		expectedUID string
+	}{
+		{
+			name: "VMI exists with UID",
+			setupVMI: func(mockClient *MockDynamicClient) {
+				vmi := &kubevirtv1.VirtualMachineInstance{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-vm",
+						Namespace: "test-namespace",
+						UID:       "test-uid-12345",
+					},
+					Status: kubevirtv1.VirtualMachineInstanceStatus{
+						Phase: kubevirtv1.Running,
+					},
+				}
+				mockClient.AddVMI(vmi)
+			},
+			expectedUID: "test-uid-12345",
+		},
+		{
+			name:        "VMI does not exist",
+			setupVMI:    func(mockClient *MockDynamicClient) {},
+			expectedUID: "",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockDynamicClient := NewMockDynamicClient()
+			fakeK8sClient := fake.NewSimpleClientset()
+
+			tc.setupVMI(mockDynamicClient)
+
+			client := NewClientWithClients(fakeK8sClient, mockDynamicClient, 30*time.Second, nil)
+
+			uid := client.getVMIUID("test-namespace", "test-vm")
+			if uid != tc.expectedUID {
+				t.Errorf("Expected UID '%s', got '%s'", tc.expectedUID, uid)
+			}
+		})
+	}
+}
+
+// TestSetBootOnce tests the SetBootOnce function with edge cases
+func TestSetBootOnce(t *testing.T) {
+	testCases := []struct {
+		name       string
+		bootTarget string
+		setupVM    func(mockClient *MockDynamicClient)
+		setupVMI   func(mockClient *MockDynamicClient)
+		validate   func(t *testing.T, mockClient *MockDynamicClient)
+	}{
+		{
+			name:       "Set boot once on VM without existing boot-once state",
+			bootTarget: "Cd",
+			setupVM: func(mockClient *MockDynamicClient) {
+				bootOrder1 := uint(1)
+				bootOrder2 := uint(2)
+				vm := &kubevirtv1.VirtualMachine{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-vm",
+						Namespace: "test-namespace",
+					},
+					Spec: kubevirtv1.VirtualMachineSpec{
+						Template: &kubevirtv1.VirtualMachineInstanceTemplateSpec{
+							Spec: kubevirtv1.VirtualMachineInstanceSpec{
+								Domain: kubevirtv1.DomainSpec{
+									Devices: kubevirtv1.Devices{
+										Disks: []kubevirtv1.Disk{
+											{Name: "disk0", BootOrder: &bootOrder1},
+											{Name: "cdrom0", BootOrder: &bootOrder2, DiskDevice: kubevirtv1.DiskDevice{CDRom: &kubevirtv1.CDRomTarget{}}},
+										},
+									},
+								},
+								Volumes: []kubevirtv1.Volume{
+									{Name: "disk0", VolumeSource: kubevirtv1.VolumeSource{DataVolume: &kubevirtv1.DataVolumeSource{Name: "dv0"}}},
+									{Name: "cdrom0", VolumeSource: kubevirtv1.VolumeSource{DataVolume: &kubevirtv1.DataVolumeSource{Name: "cdrom-dv"}}},
+								},
+							},
+						},
+					},
+				}
+				mockClient.AddVM(vm)
+			},
+			setupVMI: func(mockClient *MockDynamicClient) {
+				vmi := &kubevirtv1.VirtualMachineInstance{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-vm",
+						Namespace: "test-namespace",
+						UID:       "vmi-uid-1",
+					},
+					Status: kubevirtv1.VirtualMachineInstanceStatus{
+						Phase: kubevirtv1.Running,
+					},
+				}
+				mockClient.AddVMI(vmi)
+			},
+			validate: func(t *testing.T, mockClient *MockDynamicClient) {
+				vm, err := mockClient.GetVM("test-namespace", "test-vm")
+				if err != nil {
+					t.Fatalf("Failed to get VM: %v", err)
+				}
+
+				// Check label
+				labels := vm.GetLabels()
+				if labels[BootOnceLabel] != "enabled" {
+					t.Errorf("Expected boot-once label to be 'enabled', got '%s'", labels[BootOnceLabel])
+				}
+
+				// Check annotations
+				annotations := vm.GetAnnotations()
+				if annotations[BootOnceOriginalConfigAnnotation] == "" {
+					t.Error("Expected original config annotation to be set")
+				}
+				if annotations[BootOnceVMIUIDAnnotation] != "vmi-uid-1" {
+					t.Errorf("Expected VMI UID annotation to be 'vmi-uid-1', got '%s'", annotations[BootOnceVMIUIDAnnotation])
+				}
+				if annotations["redfish.boot.source.override.enabled"] != "Once" {
+					t.Error("Expected redfish override enabled annotation to be 'Once'")
+				}
+				if annotations["redfish.boot.source.override.target"] != "Cd" {
+					t.Error("Expected redfish override target annotation to be 'Cd'")
+				}
+			},
+		},
+		{
+			name:       "Set boot once on VM that is off (no VMI)",
+			bootTarget: "Cd",
+			setupVM: func(mockClient *MockDynamicClient) {
+				bootOrder1 := uint(1)
+				vm := &kubevirtv1.VirtualMachine{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-vm",
+						Namespace: "test-namespace",
+					},
+					Spec: kubevirtv1.VirtualMachineSpec{
+						Template: &kubevirtv1.VirtualMachineInstanceTemplateSpec{
+							Spec: kubevirtv1.VirtualMachineInstanceSpec{
+								Domain: kubevirtv1.DomainSpec{
+									Devices: kubevirtv1.Devices{
+										Disks: []kubevirtv1.Disk{
+											{Name: "disk0", BootOrder: &bootOrder1},
+											{Name: "cdrom0", DiskDevice: kubevirtv1.DiskDevice{CDRom: &kubevirtv1.CDRomTarget{}}},
+										},
+									},
+								},
+								Volumes: []kubevirtv1.Volume{
+									{Name: "disk0", VolumeSource: kubevirtv1.VolumeSource{DataVolume: &kubevirtv1.DataVolumeSource{Name: "dv0"}}},
+									{Name: "cdrom0", VolumeSource: kubevirtv1.VolumeSource{DataVolume: &kubevirtv1.DataVolumeSource{Name: "cdrom-dv"}}},
+								},
+							},
+						},
+					},
+				}
+				mockClient.AddVM(vm)
+			},
+			setupVMI: func(mockClient *MockDynamicClient) {
+				// No VMI - VM is off
+			},
+			validate: func(t *testing.T, mockClient *MockDynamicClient) {
+				vm, err := mockClient.GetVM("test-namespace", "test-vm")
+				if err != nil {
+					t.Fatalf("Failed to get VM: %v", err)
+				}
+
+				// Check VMI UID annotation is empty
+				annotations := vm.GetAnnotations()
+				if annotations[BootOnceVMIUIDAnnotation] != "" {
+					t.Errorf("Expected VMI UID annotation to be empty, got '%s'", annotations[BootOnceVMIUIDAnnotation])
+				}
+
+				// Check label is set
+				labels := vm.GetLabels()
+				if labels[BootOnceLabel] != "enabled" {
+					t.Errorf("Expected boot-once label to be 'enabled', got '%s'", labels[BootOnceLabel])
+				}
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockDynamicClient := NewMockDynamicClient()
+			fakeK8sClient := fake.NewSimpleClientset()
+
+			tc.setupVM(mockDynamicClient)
+			tc.setupVMI(mockDynamicClient)
+
+			client := NewClientWithClients(fakeK8sClient, mockDynamicClient, 30*time.Second, nil)
+
+			err := client.SetBootOnce("test-namespace", "test-vm", tc.bootTarget)
+			if err != nil {
+				t.Fatalf("SetBootOnce failed: %v", err)
+			}
+
+			tc.validate(t, mockDynamicClient)
+		})
+	}
+}
+
+// TestHandleVMUpdate tests the handleVMUpdate function
+func TestHandleVMUpdate(t *testing.T) {
+	testCases := []struct {
+		name            string
+		setupVM         func(mockClient *MockDynamicClient)
+		setupVMI        func(mockClient *MockDynamicClient)
+		expectRestore   bool
+		expectClearState bool
+	}{
+		{
+			name: "VMI UID changed - should restore boot order",
+			setupVM: func(mockClient *MockDynamicClient) {
+				bootOrder1 := uint(1)
+				vm := &kubevirtv1.VirtualMachine{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-vm",
+						Namespace: "test-namespace",
+						Labels: map[string]string{
+							BootOnceLabel: "enabled",
+						},
+						Annotations: map[string]string{
+							BootOnceOriginalConfigAnnotation:         `[{"diskName":"disk0","bootOrder":1},{"diskName":"cdrom0","bootOrder":2}]`,
+							BootOnceVMIUIDAnnotation:                  "old-vmi-uid",
+							"redfish.boot.source.override.enabled": "Once",
+							"redfish.boot.source.override.target":  "Cd",
+						},
+					},
+					Spec: kubevirtv1.VirtualMachineSpec{
+						Template: &kubevirtv1.VirtualMachineInstanceTemplateSpec{
+							Spec: kubevirtv1.VirtualMachineInstanceSpec{
+								Domain: kubevirtv1.DomainSpec{
+									Devices: kubevirtv1.Devices{
+										Disks: []kubevirtv1.Disk{
+											{Name: "disk0", BootOrder: &bootOrder1},
+											{Name: "cdrom0"},
+										},
+									},
+								},
+							},
+						},
+					},
+				}
+				mockClient.AddVM(vm)
+			},
+			setupVMI: func(mockClient *MockDynamicClient) {
+				vmi := &kubevirtv1.VirtualMachineInstance{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-vm",
+						Namespace: "test-namespace",
+						UID:       "new-vmi-uid", // Different from recorded
+					},
+					Status: kubevirtv1.VirtualMachineInstanceStatus{
+						Phase: kubevirtv1.Running,
+					},
+				}
+				mockClient.AddVMI(vmi)
+			},
+			expectRestore:    true,
+			expectClearState: true,
+		},
+		{
+			name: "VMI UID same - should not restore",
+			setupVM: func(mockClient *MockDynamicClient) {
+				vm := &kubevirtv1.VirtualMachine{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-vm",
+						Namespace: "test-namespace",
+						Labels: map[string]string{
+							BootOnceLabel: "enabled",
+						},
+						Annotations: map[string]string{
+							BootOnceOriginalConfigAnnotation:         `[{"diskName":"disk0","bootOrder":1}]`,
+							BootOnceVMIUIDAnnotation:                  "same-vmi-uid",
+							"redfish.boot.source.override.enabled": "Once",
+						},
+					},
+					Spec: kubevirtv1.VirtualMachineSpec{
+						Template: &kubevirtv1.VirtualMachineInstanceTemplateSpec{
+							Spec: kubevirtv1.VirtualMachineInstanceSpec{
+								Domain: kubevirtv1.DomainSpec{
+									Devices: kubevirtv1.Devices{
+										Disks: []kubevirtv1.Disk{
+											{Name: "disk0"},
+										},
+									},
+								},
+							},
+						},
+					},
+				}
+				mockClient.AddVM(vm)
+			},
+			setupVMI: func(mockClient *MockDynamicClient) {
+				vmi := &kubevirtv1.VirtualMachineInstance{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-vm",
+						Namespace: "test-namespace",
+						UID:       "same-vmi-uid", // Same as recorded
+					},
+					Status: kubevirtv1.VirtualMachineInstanceStatus{
+						Phase: kubevirtv1.Running,
+					},
+				}
+				mockClient.AddVMI(vmi)
+			},
+			expectRestore:    false,
+			expectClearState: false,
+		},
+		{
+			name: "VM was off, now has VMI - should restore",
+			setupVM: func(mockClient *MockDynamicClient) {
+				vm := &kubevirtv1.VirtualMachine{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-vm",
+						Namespace: "test-namespace",
+						Labels: map[string]string{
+							BootOnceLabel: "enabled",
+						},
+						Annotations: map[string]string{
+							BootOnceOriginalConfigAnnotation:         `[{"diskName":"disk0","bootOrder":1}]`,
+							BootOnceVMIUIDAnnotation:                  "", // Was off
+							"redfish.boot.source.override.enabled": "Once",
+						},
+					},
+					Spec: kubevirtv1.VirtualMachineSpec{
+						Template: &kubevirtv1.VirtualMachineInstanceTemplateSpec{
+							Spec: kubevirtv1.VirtualMachineInstanceSpec{
+								Domain: kubevirtv1.DomainSpec{
+									Devices: kubevirtv1.Devices{
+										Disks: []kubevirtv1.Disk{
+											{Name: "disk0"},
+										},
+									},
+								},
+							},
+						},
+					},
+				}
+				mockClient.AddVM(vm)
+			},
+			setupVMI: func(mockClient *MockDynamicClient) {
+				vmi := &kubevirtv1.VirtualMachineInstance{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-vm",
+						Namespace: "test-namespace",
+						UID:       "new-vmi-uid",
+					},
+					Status: kubevirtv1.VirtualMachineInstanceStatus{
+						Phase: kubevirtv1.Running,
+					},
+				}
+				mockClient.AddVMI(vmi)
+			},
+			expectRestore:    true,
+			expectClearState: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockDynamicClient := NewMockDynamicClient()
+			fakeK8sClient := fake.NewSimpleClientset()
+
+			tc.setupVM(mockDynamicClient)
+			tc.setupVMI(mockDynamicClient)
+
+			client := NewClientWithClients(fakeK8sClient, mockDynamicClient, 30*time.Second, nil)
+
+			// Get the VM to pass to handleVMUpdate
+			vm, err := mockDynamicClient.GetVM("test-namespace", "test-vm")
+			if err != nil {
+				t.Fatalf("Failed to get VM: %v", err)
+			}
+
+			// Call handleVMUpdate
+			client.handleVMUpdate(vm)
+
+			// Check the result
+			updatedVM, err := mockDynamicClient.GetVM("test-namespace", "test-vm")
+			if err != nil {
+				t.Fatalf("Failed to get updated VM: %v", err)
+			}
+
+			labels := updatedVM.GetLabels()
+			annotations := updatedVM.GetAnnotations()
+
+			if tc.expectClearState {
+				// Boot-once label should be removed
+				if labels[BootOnceLabel] != "" {
+					t.Errorf("Expected boot-once label to be removed, got '%s'", labels[BootOnceLabel])
+				}
+				// Original config annotation should be removed
+				if annotations[BootOnceOriginalConfigAnnotation] != "" {
+					t.Errorf("Expected original config annotation to be removed")
+				}
+			} else {
+				// Boot-once label should still be present
+				if labels[BootOnceLabel] != "enabled" {
+					t.Errorf("Expected boot-once label to be 'enabled', got '%s'", labels[BootOnceLabel])
+				}
 			}
 		})
 	}

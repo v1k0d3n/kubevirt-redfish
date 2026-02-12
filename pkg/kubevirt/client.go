@@ -23,6 +23,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -52,6 +53,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -83,6 +85,11 @@ type Client struct {
 		operationCounts map[string]int64
 		operationTimes  map[string]time.Duration
 	}
+
+	// Boot-once watcher management
+	watcherCtx    context.Context
+	watcherCancel context.CancelFunc
+	watcherWg     sync.WaitGroup
 }
 
 // init registers KubeVirt and CDI types with the runtime scheme for conversion
@@ -283,6 +290,9 @@ func (c *Client) GetPerformanceMetrics() map[string]interface{} {
 
 // Close properly cleans up the client resources
 func (c *Client) Close() error {
+	// Stop the boot-once watcher if running
+	c.stopBootOnceWatcher()
+
 	if c.httpClient != nil && c.httpClient.Transport != nil {
 		if transport, ok := c.httpClient.Transport.(*http.Transport); ok {
 			transport.CloseIdleConnections()
@@ -2473,6 +2483,7 @@ func (*Client) modifyVmBootOrder(vmCopy *kubevirtv1.VirtualMachine, bootTarget s
 }
 
 // SetBootOnce sets the boot source override to "Once" for the next boot
+// It saves the original boot configuration and VMI UID so it can be restored after reboot
 func (c *Client) SetBootOnce(namespace, name, bootTarget string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
@@ -2488,17 +2499,70 @@ func (c *Client) SetBootOnce(namespace, name, bootTarget string) error {
 	// Update VM with boot once configuration
 	vmCopy := vm.DeepCopy()
 
-	// Store boot once configuration in VM annotations
+	// Get current annotations and labels
 	annotations := vmCopy.GetAnnotations()
 	if annotations == nil {
 		annotations = make(map[string]string)
 	}
+	vmLabels := vmCopy.GetLabels()
+	if vmLabels == nil {
+		vmLabels = make(map[string]string)
+	}
 
+	// Check if boot-once is already configured
+	existingOriginalConfig := annotations[BootOnceOriginalConfigAnnotation]
+	existingVMIUID := annotations[BootOnceVMIUIDAnnotation]
+	hasExistingBootOnce := existingOriginalConfig != ""
+
+	// Get current VMI UID
+	currentVMIUID := c.getVMIUID(namespace, name)
+
+	if hasExistingBootOnce {
+		// Boot-once already configured - check if the recorded VMI is still running
+		if existingVMIUID != "" && existingVMIUID == currentVMIUID {
+			// Same VMI is still running - keep original config, just update boot order
+			logger.Info("Boot-once already configured for VM %s/%s with same VMI, updating boot target only", namespace, name)
+		} else {
+			// VMI has changed or was empty - clear old state and capture new original config
+			logger.Info("Boot-once state is stale for VM %s/%s (VMI changed), capturing new original config", namespace, name)
+
+			// Restore the original boot order so we capture the real original state below
+			if err := c.restoreBootOrder(vmCopy, existingOriginalConfig); err != nil {
+				logger.Warning("Failed to restore original boot order before recapture: %v", err)
+			}
+
+			// Capture the (now restored) boot order as the new original config
+			originalConfig, err := c.captureCurrentBootOrder(vmCopy)
+			if err != nil {
+				return fmt.Errorf("failed to capture boot order: %w", err)
+			}
+			annotations[BootOnceOriginalConfigAnnotation] = originalConfig
+			annotations[BootOnceVMIUIDAnnotation] = currentVMIUID
+		}
+	} else {
+		// No existing boot-once - capture current boot order
+		originalConfig, err := c.captureCurrentBootOrder(vmCopy)
+		if err != nil {
+			return fmt.Errorf("failed to capture boot order: %w", err)
+		}
+		annotations[BootOnceOriginalConfigAnnotation] = originalConfig
+		annotations[BootOnceVMIUIDAnnotation] = currentVMIUID
+	}
+
+	// Add boot-once label for watch selector
+	vmLabels[BootOnceLabel] = "enabled"
+	vmCopy.SetLabels(vmLabels)
+
+	// Store Redfish boot override annotations
 	annotations["redfish.boot.source.override.enabled"] = "Once"
 	annotations["redfish.boot.source.override.target"] = bootTarget
 	annotations["redfish.boot.source.override.mode"] = "UEFI"
-
 	vmCopy.SetAnnotations(annotations)
+
+	// Modify boot order to boot from target
+	if err := c.modifyVmBootOrder(vmCopy, bootTarget); err != nil {
+		return fmt.Errorf("failed to modify boot order: %w", err)
+	}
 
 	// Convert to unstructured for dynamic client update
 	vmUnstructured, err := vmToUnstructured(vmCopy)
@@ -2518,7 +2582,7 @@ func (c *Client) SetBootOnce(namespace, name, bootTarget string) error {
 		return fmt.Errorf("failed to update VM boot once configuration: %w", err)
 	}
 
-	logger.Info("Successfully set boot once to %s for VM %s/%s", bootTarget, namespace, name)
+	logger.Info("Successfully set boot once to %s for VM %s/%s (VMI UID: %s)", bootTarget, namespace, name, currentVMIUID)
 	return nil
 }
 
@@ -2977,4 +3041,421 @@ func sanitizeResourceName(resourceName string) string {
 	shortHash := new(big.Int).SetBytes(hash[:]).Text(36)[:5]
 
 	return resourceName[:49] + shortHash + "truncated"
+}
+
+// =============================================================================
+// BOOT ONCE HELPER FUNCTIONS
+// =============================================================================
+
+// BootOnceLabel is the label used to identify VMs with boot-once configuration
+const BootOnceLabel = "redfish.boot.once"
+
+// BootOnceAnnotations are the annotation keys used for boot-once state
+const (
+	BootOnceOriginalConfigAnnotation = "redfish.boot.once.original-config"
+	BootOnceVMIUIDAnnotation         = "redfish.boot.once.vmi-uid"
+)
+
+// BootOrderConfig represents the boot order configuration for a disk
+type BootOrderConfig struct {
+	DiskName  string `json:"diskName"`
+	BootOrder *uint  `json:"bootOrder,omitempty"` // nil means no boot order was set
+}
+
+// captureCurrentBootOrder returns JSON-encoded slice of disk boot orders
+func (c *Client) captureCurrentBootOrder(vm *kubevirtv1.VirtualMachine) (string, error) {
+	if vm.Spec.Template == nil {
+		return "[]", nil
+	}
+
+	var bootOrders []BootOrderConfig
+	for _, disk := range vm.Spec.Template.Spec.Domain.Devices.Disks {
+		config := BootOrderConfig{
+			DiskName: disk.Name,
+		}
+		if disk.BootOrder != nil {
+			order := *disk.BootOrder
+			config.BootOrder = &order
+		}
+		bootOrders = append(bootOrders, config)
+	}
+
+	jsonData, err := json.Marshal(bootOrders)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal boot order config: %w", err)
+	}
+
+	return string(jsonData), nil
+}
+
+// restoreBootOrder restores boot order from JSON-encoded config
+func (c *Client) restoreBootOrder(vm *kubevirtv1.VirtualMachine, configJSON string) error {
+	if vm.Spec.Template == nil {
+		return nil
+	}
+
+	var bootOrders []BootOrderConfig
+	if err := json.Unmarshal([]byte(configJSON), &bootOrders); err != nil {
+		return fmt.Errorf("failed to unmarshal boot order config: %w", err)
+	}
+
+	// Create a map for quick lookup
+	bootOrderMap := make(map[string]*uint)
+	for _, config := range bootOrders {
+		if config.BootOrder != nil {
+			order := *config.BootOrder
+			bootOrderMap[config.DiskName] = &order
+		} else {
+			bootOrderMap[config.DiskName] = nil
+		}
+	}
+
+	// Restore boot orders to disks
+	for i := range vm.Spec.Template.Spec.Domain.Devices.Disks {
+		disk := &vm.Spec.Template.Spec.Domain.Devices.Disks[i]
+		if order, found := bootOrderMap[disk.Name]; found {
+			if order != nil {
+				orderCopy := *order
+				disk.BootOrder = &orderCopy
+			} else {
+				disk.BootOrder = nil
+			}
+		}
+	}
+
+	return nil
+}
+
+// getVMIUID returns the UID of the current VMI, or empty string if not running
+func (c *Client) getVMIUID(namespace, name string) string {
+	vmi, err := c.GetVMI(namespace, name)
+	if err != nil {
+		// VMI doesn't exist or error getting it - return empty string
+		return ""
+	}
+	return string(vmi.GetUID())
+}
+
+// clearBootOnceState removes boot-once label and annotations from VM
+func (c *Client) clearBootOnceState(namespace, name string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+	defer cancel()
+
+	// Get the current VM
+	vm, err := c.GetVM(namespace, name)
+	if err != nil {
+		return fmt.Errorf("failed to get VM %s: %w", name, err)
+	}
+
+	vmCopy := vm.DeepCopy()
+
+	// Remove the boot-once label
+	labels := vmCopy.GetLabels()
+	if labels != nil {
+		delete(labels, BootOnceLabel)
+		vmCopy.SetLabels(labels)
+	}
+
+	// Remove boot-once annotations
+	annotations := vmCopy.GetAnnotations()
+	if annotations != nil {
+		delete(annotations, BootOnceOriginalConfigAnnotation)
+		delete(annotations, BootOnceVMIUIDAnnotation)
+		delete(annotations, "redfish.boot.source.override.enabled")
+		delete(annotations, "redfish.boot.source.override.target")
+		delete(annotations, "redfish.boot.source.override.mode")
+		vmCopy.SetAnnotations(annotations)
+	}
+
+	// Convert to unstructured for dynamic client update
+	vmUnstructured, err := vmToUnstructured(vmCopy)
+	if err != nil {
+		return fmt.Errorf("failed to convert VM to unstructured: %w", err)
+	}
+
+	// Update VM
+	gvr := schema.GroupVersionResource{
+		Group:    "kubevirt.io",
+		Version:  "v1",
+		Resource: "virtualmachines",
+	}
+
+	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).Update(ctx, vmUnstructured, metav1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to clear boot-once state: %w", err)
+	}
+
+	logger.Info("Cleared boot-once state for VM %s/%s", namespace, name)
+	return nil
+}
+
+// =============================================================================
+// BOOT ONCE WATCHER
+// =============================================================================
+
+// StartBootOnceWatcher starts the Kubernetes watch for labeled VMs
+// namespaces: list of namespaces to watch (from chassis config)
+func (c *Client) StartBootOnceWatcher(ctx context.Context, namespaces []string) {
+	if c.watcherCancel != nil {
+		logger.Warning("Boot-once watcher already running, not starting another")
+		return
+	}
+
+	c.watcherCtx, c.watcherCancel = context.WithCancel(ctx)
+
+	logger.Info("Starting boot-once watcher for namespaces: %v", namespaces)
+
+	for _, namespace := range namespaces {
+		c.watcherWg.Add(1)
+		go func(ns string) {
+			defer c.watcherWg.Done()
+			c.runNamespaceWatcher(c.watcherCtx, ns)
+		}(namespace)
+	}
+}
+
+// stopBootOnceWatcher stops the watcher (called from Close)
+func (c *Client) stopBootOnceWatcher() {
+	if c.watcherCancel != nil {
+		logger.Info("Stopping boot-once watcher")
+		c.watcherCancel()
+		c.watcherWg.Wait()
+		c.watcherCancel = nil
+		logger.Info("Boot-once watcher stopped")
+	}
+}
+
+// runNamespaceWatcher runs a watch for a single namespace with automatic reconnection
+func (c *Client) runNamespaceWatcher(ctx context.Context, namespace string) {
+	logger.Info("Starting boot-once watcher for namespace: %s", namespace)
+
+	// First, reconcile any existing boot-once VMs to clean up stale state
+	if err := c.reconcileExistingBootOnceVMs(namespace); err != nil {
+		logger.Error("Failed to reconcile existing boot-once VMs in namespace %s: %v", namespace, err)
+	}
+
+	gvr := schema.GroupVersionResource{
+		Group:    "kubevirt.io",
+		Version:  "v1",
+		Resource: "virtualmachines",
+	}
+
+	// Label selector for boot-once enabled VMs
+	labelSelector := fmt.Sprintf("%s=enabled", BootOnceLabel)
+
+	backoff := time.Second
+	maxBackoff := time.Minute
+
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Info("Boot-once watcher for namespace %s shutting down", namespace)
+			return
+		default:
+		}
+
+		// Create watch with label selector
+		watcher, err := c.dynamicClient.Resource(gvr).Namespace(namespace).Watch(ctx, metav1.ListOptions{
+			LabelSelector: labelSelector,
+		})
+		if err != nil {
+			logger.Error("Failed to create watch for namespace %s: %v, retrying in %v", namespace, err, backoff)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+				backoff = min(backoff*2, maxBackoff)
+				continue
+			}
+		}
+
+		// Reset backoff on successful watch creation
+		backoff = time.Second
+
+		// Process watch events
+		c.processWatchEvents(ctx, namespace, watcher)
+
+		// If we get here, the watch ended - will reconnect
+		logger.Info("Watch for namespace %s ended, reconnecting...", namespace)
+	}
+}
+
+// processWatchEvents handles events from a watch channel
+func (c *Client) processWatchEvents(ctx context.Context, namespace string, watcher watch.Interface) {
+	defer watcher.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok := <-watcher.ResultChan():
+			if !ok {
+				// Channel closed, need to reconnect
+				return
+			}
+
+			switch event.Type {
+			case watch.Added, watch.Modified:
+				// Convert to unstructured
+				u, ok := event.Object.(*unstructured.Unstructured)
+				if !ok {
+					logger.Warning("Unexpected object type in watch event: %T", event.Object)
+					continue
+				}
+
+				// Convert to typed VM
+				vm, err := unstructuredToVM(u)
+				if err != nil {
+					logger.Error("Failed to convert watch event to VM: %v", err)
+					continue
+				}
+
+				c.handleVMUpdate(vm)
+
+			case watch.Deleted:
+				// VM deleted, nothing to do - boot-once state is gone with it
+				logger.Debug("VM deleted from boot-once watch")
+
+			case watch.Error:
+				logger.Error("Watch error event received for namespace %s", namespace)
+				return
+			}
+		}
+	}
+}
+
+// handleVMUpdate processes a VM update event from the watch
+func (c *Client) handleVMUpdate(vm *kubevirtv1.VirtualMachine) {
+	namespace := vm.GetNamespace()
+	name := vm.GetName()
+
+	// Get the boot-once annotations
+	annotations := vm.GetAnnotations()
+	if annotations == nil {
+		return
+	}
+
+	originalConfig := annotations[BootOnceOriginalConfigAnnotation]
+	recordedVMIUID := annotations[BootOnceVMIUIDAnnotation]
+
+	if originalConfig == "" {
+		// No original config, nothing to restore
+		logger.Debug("VM %s/%s has boot-once label but no original config annotation", namespace, name)
+		return
+	}
+
+	// Get current VMI UID
+	currentVMIUID := c.getVMIUID(namespace, name)
+
+	// Check if VMI has changed
+	vmiChanged := false
+	if recordedVMIUID == "" {
+		// Recorded UID was empty (VM was off) - check if VMI now exists
+		vmiChanged = currentVMIUID != ""
+	} else {
+		// Recorded UID was set - check if it's different
+		vmiChanged = currentVMIUID != "" && currentVMIUID != recordedVMIUID
+	}
+
+	if vmiChanged {
+		logger.Info("VMI UID changed for VM %s/%s (recorded: %s, current: %s), restoring boot order",
+			namespace, name, recordedVMIUID, currentVMIUID)
+
+		// Get fresh VM to avoid conflicts
+		freshVM, err := c.GetVM(namespace, name)
+		if err != nil {
+			logger.Error("Failed to get VM %s/%s for boot order restoration: %v", namespace, name, err)
+			return
+		}
+
+		vmCopy := freshVM.DeepCopy()
+
+		// Restore the original boot order
+		if err := c.restoreBootOrder(vmCopy, originalConfig); err != nil {
+			logger.Error("Failed to restore boot order for VM %s/%s: %v", namespace, name, err)
+			return
+		}
+
+		// Remove boot-once label and annotations
+		vmLabels := vmCopy.GetLabels()
+		if vmLabels != nil {
+			delete(vmLabels, BootOnceLabel)
+			vmCopy.SetLabels(vmLabels)
+		}
+
+		vmAnnotations := vmCopy.GetAnnotations()
+		if vmAnnotations != nil {
+			delete(vmAnnotations, BootOnceOriginalConfigAnnotation)
+			delete(vmAnnotations, BootOnceVMIUIDAnnotation)
+			delete(vmAnnotations, "redfish.boot.source.override.enabled")
+			delete(vmAnnotations, "redfish.boot.source.override.target")
+			delete(vmAnnotations, "redfish.boot.source.override.mode")
+			vmCopy.SetAnnotations(vmAnnotations)
+		}
+
+		// Update VM with restored boot order
+		ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+		defer cancel()
+
+		vmUnstructured, err := vmToUnstructured(vmCopy)
+		if err != nil {
+			logger.Error("Failed to convert VM to unstructured: %v", err)
+			return
+		}
+
+		gvr := schema.GroupVersionResource{
+			Group:    "kubevirt.io",
+			Version:  "v1",
+			Resource: "virtualmachines",
+		}
+
+		_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).Update(ctx, vmUnstructured, metav1.UpdateOptions{})
+		if err != nil {
+			logger.Error("Failed to update VM %s/%s with restored boot order: %v", namespace, name, err)
+			return
+		}
+
+		logger.Info("Successfully restored boot order for VM %s/%s after VMI change", namespace, name)
+	}
+}
+
+// reconcileExistingBootOnceVMs processes all labeled VMs on startup to clean stale state
+func (c *Client) reconcileExistingBootOnceVMs(namespace string) error {
+	logger.Info("Reconciling existing boot-once VMs in namespace %s", namespace)
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+	defer cancel()
+
+	gvr := schema.GroupVersionResource{
+		Group:    "kubevirt.io",
+		Version:  "v1",
+		Resource: "virtualmachines",
+	}
+
+	// Label selector for boot-once enabled VMs
+	labelSelector := fmt.Sprintf("%s=enabled", BootOnceLabel)
+
+	// List all VMs with boot-once label
+	vmList, err := c.dynamicClient.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to list boot-once VMs: %w", err)
+	}
+
+	logger.Info("Found %d VMs with boot-once label in namespace %s", len(vmList.Items), namespace)
+
+	// Process each VM
+	for _, item := range vmList.Items {
+		vm, err := unstructuredToVM(&item)
+		if err != nil {
+			logger.Error("Failed to convert VM from list: %v", err)
+			continue
+		}
+
+		// Handle the VM as if it was an update event
+		c.handleVMUpdate(vm)
+	}
+
+	return nil
 }

@@ -219,6 +219,17 @@ func NewServer(config *config.Config, kubevirtClient *kubevirt.Client) *Server {
 // Returns:
 // - error: Any error that occurred during server startup or operation
 func (s *Server) Start() error {
+	// Start the boot-once watcher if not in test mode
+	if !s.config.Server.TestMode && s.kubevirtClient != nil {
+		namespaces := make([]string, 0, len(s.config.Chassis))
+		for _, chassis := range s.config.Chassis {
+			namespaces = append(namespaces, chassis.Namespace)
+		}
+		if len(namespaces) > 0 {
+			s.kubevirtClient.StartBootOnceWatcher(context.Background(), namespaces)
+		}
+	}
+
 	// Create HTTP server
 	s.httpServer = &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", s.config.Server.Host, s.config.Server.Port),
