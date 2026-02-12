@@ -134,9 +134,6 @@ func (m *MockDynamicClient) AddVM(vm *kubevirtv1.VirtualMachine) error {
 	if err != nil {
 		return err
 	}
-	// Set TypeMeta which is often missing after conversion
-	u.SetAPIVersion("kubevirt.io/v1")
-	u.SetKind("VirtualMachine")
 
 	gvr := schema.GroupVersionResource{
 		Group:    "kubevirt.io",
@@ -153,9 +150,6 @@ func (m *MockDynamicClient) AddVMI(vmi *kubevirtv1.VirtualMachineInstance) error
 	if err != nil {
 		return err
 	}
-	// Set TypeMeta which is often missing after conversion
-	u.SetAPIVersion("kubevirt.io/v1")
-	u.SetKind("VirtualMachineInstance")
 
 	gvr := schema.GroupVersionResource{
 		Group:    "kubevirt.io",

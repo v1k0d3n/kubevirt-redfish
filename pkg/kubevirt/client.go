@@ -119,7 +119,11 @@ func vmToUnstructured(vm *kubevirtv1.VirtualMachine) (*unstructured.Unstructured
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert VirtualMachine to unstructured: %w", err)
 	}
-	return &unstructured.Unstructured{Object: obj}, nil
+	u := &unstructured.Unstructured{Object: obj}
+	// Set the GVK as it's not preserved by the converter
+	u.SetAPIVersion("kubevirt.io/v1")
+	u.SetKind("VirtualMachine")
+	return u, nil
 }
 
 // vmiToUnstructured converts a typed VirtualMachineInstance to an unstructured object
@@ -128,7 +132,11 @@ func vmiToUnstructured(vmi *kubevirtv1.VirtualMachineInstance) (*unstructured.Un
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert VirtualMachineInstance to unstructured: %w", err)
 	}
-	return &unstructured.Unstructured{Object: obj}, nil
+	u := &unstructured.Unstructured{Object: obj}
+	// Set the GVK as it's not preserved by the converter
+	u.SetAPIVersion("kubevirt.io/v1")
+	u.SetKind("VirtualMachineInstance")
+	return u, nil
 }
 
 // unstructuredToDataVolume converts an unstructured object to a typed DataVolume
@@ -147,7 +155,11 @@ func volumeImportSourceToUnstructured(vis *cdiv1beta1.VolumeImportSource) (*unst
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert VolumeImportSource to unstructured: %w", err)
 	}
-	return &unstructured.Unstructured{Object: obj}, nil
+	u := &unstructured.Unstructured{Object: obj}
+	// Set the GVK as it's not preserved by the converter
+	u.SetAPIVersion("cdi.kubevirt.io/v1beta1")
+	u.SetKind("VolumeImportSource")
+	return u, nil
 }
 
 // NewClient creates a new KubeVirt client with connection pooling
@@ -1533,7 +1545,6 @@ func (c *Client) InsertVirtualMedia(namespace, name, mediaID, imageURL string) e
 	logger.Debug("DEBUG: Calling insertVirtualMediaAsync for VM %s/%s", namespace, name)
 	if err := c.insertVirtualMediaAsync(namespace, name, mediaID, imageURL); err != nil {
 		logger.Error("Failed to insert virtual media %s for VM %s/%s: %v", mediaID, namespace, name, err)
-	logger.Error("insertVirtualMediaAsync failed for VM %s/%s: %v", namespace, name, err)
 	return err
 	}
 
