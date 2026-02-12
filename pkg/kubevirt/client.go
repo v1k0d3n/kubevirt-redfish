@@ -1533,8 +1533,8 @@ func (c *Client) InsertVirtualMedia(namespace, name, mediaID, imageURL string) e
 	logger.Debug("DEBUG: Calling insertVirtualMediaAsync for VM %s/%s", namespace, name)
 	if err := c.insertVirtualMediaAsync(namespace, name, mediaID, imageURL); err != nil {
 		logger.Error("Failed to insert virtual media %s for VM %s/%s: %v", mediaID, namespace, name, err)
-		logger.Debug("DEBUG: insertVirtualMediaAsync failed for VM %s/%s: %v", namespace, name, err)
-		return err
+	logger.Error("insertVirtualMediaAsync failed for VM %s/%s: %v", namespace, name, err)
+	return err
 	}
 
 	logger.Info("Successfully completed virtual media insertion %s for VM %s/%s", mediaID, namespace, name)
@@ -1569,7 +1569,7 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 	// Parse URL to determine scheme
 	u, parseErr := url.Parse(imageURL)
 	if parseErr != nil {
-		logger.Debug("DEBUG: Failed to parse URL %s: %v", imageURL, parseErr)
+		logger.Error("Failed to parse URL %s: %v", imageURL, parseErr)
 		return fmt.Errorf("failed to parse URL %s: %w", imageURL, parseErr)
 	}
 	logger.Debug("DEBUG: Parsed URL - scheme=%s, host=%s", u.Scheme, u.Host)
@@ -1590,7 +1590,7 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 
 		vm, err := c.GetVM(namespace, name)
 		if err != nil {
-			logger.Debug("DEBUG: Failed to get VM %s/%s: %v", namespace, name, err)
+			logger.Error("Failed to get VM %s/%s: %v", namespace, name, err)
 			return fmt.Errorf("failed to get VM %s: %w", name, err)
 		}
 		logger.Debug("DEBUG: Successfully retrieved VM %s/%s", namespace, name)
@@ -1666,7 +1666,7 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 		// Convert to unstructured for dynamic client update
 		vmUnstructured, err := vmToUnstructured(vmCopy)
 		if err != nil {
-			logger.Debug("DEBUG: Failed to convert VM to unstructured: %v", err)
+			logger.Error("Failed to convert VM to unstructured: %v", err)
 			return fmt.Errorf("failed to convert VM to unstructured: %w", err)
 		}
 
@@ -1685,7 +1685,7 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 				time.Sleep(time.Duration(attempt) * time.Second)
 				continue
 			}
-			logger.Debug("DEBUG: Failed to update VM %s/%s: %v", namespace, name, err)
+			logger.Error("Failed to update VM %s/%s: %v", namespace, name, err)
 			return fmt.Errorf("failed to update VM: %w", err)
 		}
 
@@ -1741,7 +1741,7 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 				// Delete the unusable PVC
 				err = c.kubernetesClient.CoreV1().PersistentVolumeClaims(namespace).Delete(ctx, dataVolumeName, metav1.DeleteOptions{})
 				if err != nil {
-					logger.Debug("DEBUG: Failed to delete unusable PVC %s: %v", dataVolumeName, err)
+					logger.Error("Failed to delete unusable PVC %s: %v", dataVolumeName, err)
 					return fmt.Errorf("failed to delete unusable PVC: %w", err)
 				}
 				// Wait a moment for deletion to complete
@@ -1759,7 +1759,7 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 					// PVC already exists, we can use it
 					return nil // Success - we'll use the existing PVC
 				}
-				logger.Debug("DEBUG: Failed to create PVC %s: %v", dataVolumeName, createErr)
+				logger.Error("Failed to create PVC %s: %v", dataVolumeName, createErr)
 				return fmt.Errorf("failed to create PVC: %w", createErr)
 			}
 			return nil
@@ -1775,7 +1775,7 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 		// Use helper pod to copy ISO to PVC
 		logger.Debug("DEBUG: Calling copyISOToPVC for PVC %s", dataVolumeName)
 		if err := c.copyISOToPVC(namespace, dataVolumeName, imageURL, isoDownloadTimeout); err != nil {
-			logger.Debug("DEBUG: copyISOToPVC failed for PVC %s: %v", dataVolumeName, err)
+			logger.Error("copyISOToPVC failed for PVC %s: %v", dataVolumeName, err)
 			return fmt.Errorf("failed to copy ISO to PVC: %w", err)
 		}
 		logger.Info("Helper pod completed ISO import for PVC %s", dataVolumeName)
@@ -2045,20 +2045,20 @@ func (c *Client) copyISOToPVC(namespace, dataVolumeName, imageURL, isoDownloadTi
 				// Get the existing pod
 				existingPod, getErr := c.kubernetesClient.CoreV1().Pods(namespace).Get(context.Background(), helperPodName, metav1.GetOptions{})
 				if getErr != nil {
-					logger.Debug("DEBUG: Failed to get existing helper pod %s: %v", helperPodName, getErr)
+					logger.Error("Failed to get existing helper pod %s: %v", helperPodName, getErr)
 					return fmt.Errorf("failed to get existing helper pod: %w", getErr)
 				}
 				createdPod = existingPod
 				return nil // Success - we'll use the existing pod
 			}
-			logger.Debug("DEBUG: Failed to create helper pod %s: %v", helperPodName, createErr)
+			logger.Error("Failed to create helper pod %s: %v", helperPodName, createErr)
 			return fmt.Errorf("failed to create helper pod: %w", createErr)
 		}
 		return nil
 	})
 
 	if err != nil {
-		logger.Debug("DEBUG: All attempts to create helper pod %s failed: %v", helperPodName, err)
+		logger.Error("All attempts to create helper pod %s failed: %v", helperPodName, err)
 		return fmt.Errorf("failed to create helper pod after retries: %w", err)
 	}
 

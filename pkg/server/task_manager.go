@@ -316,7 +316,7 @@ func (w *Worker) processVirtualMediaInsert(job *Job) error {
 	err := w.taskMgr.kubevirtClient.InsertVirtualMedia(namespace, vmName, mediaID, imageURL)
 	if err != nil {
 		logger.Error("Failed to insert virtual media for VM %s/%s: %v", namespace, vmName, err)
-		logger.Debug("DEBUG: Worker %d virtual media insertion failed for VM %s/%s: %v", w.ID, namespace, vmName, err)
+		logger.Error("Worker %d virtual media insertion failed for VM %s/%s: %v", w.ID, namespace, vmName, err)
 		return fmt.Errorf("failed to insert virtual media: %w", err)
 	}
 
