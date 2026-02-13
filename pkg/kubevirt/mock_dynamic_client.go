@@ -356,7 +356,76 @@ func (r *mockNamespaceableResource) Patch(ctx context.Context, name string, pt t
 		r.client.addResource(r.gvr, r.namespace, name, copied)
 	}
 
+	// Apply Merge patch if it's a MergePatchType (RFC 7396)
+	if pt == types.MergePatchType {
+		var patchMap map[string]interface{}
+		if err := json.Unmarshal(data, &patchMap); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal merge patch: %w", err)
+		}
+
+		// Deep merge patchMap into copied.Object
+		mergeMaps(copied.Object, patchMap)
+
+		// Store the updated object
+		r.client.addResource(r.gvr, r.namespace, name, copied)
+	}
+
 	return deepCopyUnstructured(copied)
+}
+
+// mergeMaps recursively merges src into dst according to RFC 7396 JSON Merge Patch.
+// - If src has a key with value null, the key is deleted from dst
+// - If src has a key with a non-null value, it replaces the value in dst
+// - Objects are merged recursively
+func mergeMaps(dst, src map[string]interface{}) {
+	for key, srcValue := range src {
+		if srcValue == nil {
+			// null means delete the key
+			delete(dst, key)
+		} else if srcMap, ok := srcValue.(map[string]interface{}); ok {
+			// Source value is a map - need to merge recursively
+			if dstMap, ok := dst[key].(map[string]interface{}); ok {
+				// Destination also has a map - merge recursively
+				mergeMaps(dstMap, srcMap)
+			} else {
+				// Destination doesn't have a map - replace with a copy
+				dst[key] = deepCopyMap(srcMap)
+			}
+		} else {
+			// For all other values (including arrays), replace entirely
+			dst[key] = srcValue
+		}
+	}
+}
+
+// deepCopyMap creates a deep copy of a map
+func deepCopyMap(src map[string]interface{}) map[string]interface{} {
+	dst := make(map[string]interface{}, len(src))
+	for k, v := range src {
+		if m, ok := v.(map[string]interface{}); ok {
+			dst[k] = deepCopyMap(m)
+		} else if s, ok := v.([]interface{}); ok {
+			dst[k] = deepCopySlice(s)
+		} else {
+			dst[k] = v
+		}
+	}
+	return dst
+}
+
+// deepCopySlice creates a deep copy of a slice
+func deepCopySlice(src []interface{}) []interface{} {
+	dst := make([]interface{}, len(src))
+	for i, v := range src {
+		if m, ok := v.(map[string]interface{}); ok {
+			dst[i] = deepCopyMap(m)
+		} else if s, ok := v.([]interface{}); ok {
+			dst[i] = deepCopySlice(s)
+		} else {
+			dst[i] = v
+		}
+	}
+	return dst
 }
 
 // jsonPatchOp represents a JSON patch operation

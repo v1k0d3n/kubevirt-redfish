@@ -60,6 +60,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	jsonpatch "gopkg.in/evanphx/json-patch.v4"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	cdiv1beta1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
 )
@@ -131,6 +132,26 @@ func vmToUnstructured(vm *kubevirtv1.VirtualMachine) (*unstructured.Unstructured
 	u.SetAPIVersion("kubevirt.io/v1")
 	u.SetKind("VirtualMachine")
 	return u, nil
+}
+
+// computeVMPatch compares original and modified VMs and returns a JSON Merge Patch.
+// This preserves unknown fields that may exist in the cluster object but are not
+// represented in the typed VirtualMachine struct.
+func computeVMPatch(original, modified *kubevirtv1.VirtualMachine) ([]byte, error) {
+	originalJSON, err := json.Marshal(original)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal original VM: %w", err)
+	}
+	modifiedJSON, err := json.Marshal(modified)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal modified VM: %w", err)
+	}
+
+	patch, err := jsonpatch.CreateMergePatch(originalJSON, modifiedJSON)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create merge patch: %w", err)
+	}
+	return patch, nil
 }
 
 // vmiToUnstructured converts a typed VirtualMachineInstance to an unstructured object
@@ -1361,20 +1382,20 @@ func (c *Client) RecordVMBootOptionsAsAnnotations(namespace, name string, option
 
 	vmCopy.SetAnnotations(annotations)
 
-	// Convert to unstructured for dynamic client update
-	vmUnstructured, err := vmToUnstructured(vmCopy)
+	// Compute merge patch from changes (preserves unknown fields)
+	patch, err := computeVMPatch(vm, vmCopy)
 	if err != nil {
-		return fmt.Errorf("failed to convert VM to unstructured: %w", err)
+		return fmt.Errorf("failed to compute VM patch: %w", err)
 	}
 
-	// Update VM
+	// Apply patch
 	gvr := schema.GroupVersionResource{
 		Group:    "kubevirt.io",
 		Version:  "v1",
 		Resource: "virtualmachines",
 	}
 
-	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).Update(ctx, vmUnstructured, metav1.UpdateOptions{})
+	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to update VM boot options: %w", err)
 	}
@@ -1684,11 +1705,11 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 			logger.Debug("DEBUG: Volume reference %s already exists", deviceName)
 		}
 
-		// Convert to unstructured for dynamic client update
-		vmUnstructured, err := vmToUnstructured(vmCopy)
+		// Compute merge patch from changes (preserves unknown fields)
+		patch, err := computeVMPatch(vm, vmCopy)
 		if err != nil {
-			logger.Error("Failed to convert VM to unstructured: %v", err)
-			return fmt.Errorf("failed to convert VM to unstructured: %w", err)
+			logger.Error("Failed to compute VM patch: %v", err)
+			return fmt.Errorf("failed to compute VM patch: %w", err)
 		}
 
 		gvrVM := schema.GroupVersionResource{
@@ -1698,7 +1719,7 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 		}
 
 		logger.Debug("DEBUG: Updating VM %s/%s with new CD-ROM device", namespace, name)
-		_, err = c.dynamicClient.Resource(gvrVM).Namespace(namespace).Update(ctx, vmUnstructured, metav1.UpdateOptions{})
+		_, err = c.dynamicClient.Resource(gvrVM).Namespace(namespace).Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
 		if err != nil {
 			if strings.Contains(err.Error(), "the object has been modified") && attempt < maxRetries {
 				logger.Info("Concurrent modification detected, retrying VM update (attempt %d/%d)", attempt, maxRetries)
@@ -2394,20 +2415,20 @@ func (c *Client) SetBootOrder(namespace, name, bootTarget string) error {
 		return err
 	}
 
-	// Convert to unstructured for dynamic client update
-	vmUnstructured, err := vmToUnstructured(vmCopy)
+	// Compute merge patch from changes (preserves unknown fields)
+	patch, err := computeVMPatch(vm, vmCopy)
 	if err != nil {
-		return fmt.Errorf("failed to convert VM to unstructured: %w", err)
+		return fmt.Errorf("failed to compute VM patch: %w", err)
 	}
 
-	// Update VM
+	// Apply patch
 	gvr := schema.GroupVersionResource{
 		Group:    "kubevirt.io",
 		Version:  "v1",
 		Resource: "virtualmachines",
 	}
 
-	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).Update(ctx, vmUnstructured, metav1.UpdateOptions{})
+	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to update VM boot order: %w", err)
 	}
@@ -2564,20 +2585,20 @@ func (c *Client) SetBootOnce(namespace, name, bootTarget string) error {
 		return fmt.Errorf("failed to modify boot order: %w", err)
 	}
 
-	// Convert to unstructured for dynamic client update
-	vmUnstructured, err := vmToUnstructured(vmCopy)
+	// Compute merge patch from changes (preserves unknown fields)
+	patch, err := computeVMPatch(vm, vmCopy)
 	if err != nil {
-		return fmt.Errorf("failed to convert VM to unstructured: %w", err)
+		return fmt.Errorf("failed to compute VM patch: %w", err)
 	}
 
-	// Update VM
+	// Apply patch
 	gvr := schema.GroupVersionResource{
 		Group:    "kubevirt.io",
 		Version:  "v1",
 		Resource: "virtualmachines",
 	}
 
-	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).Update(ctx, vmUnstructured, metav1.UpdateOptions{})
+	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to update VM boot once configuration: %w", err)
 	}
@@ -2655,23 +2676,23 @@ func (c *Client) EjectVirtualMedia(namespace, name, mediaID string) error {
 	}
 	vmCopy.Spec.Template.Spec.Volumes = newVolumes
 
-	// Convert to unstructured for dynamic client update
-	vmUnstructured, err := vmToUnstructured(vmCopy)
+	// Compute merge patch from changes (preserves unknown fields)
+	patch, err := computeVMPatch(vm, vmCopy)
 	if err != nil {
-		logger.Error("Failed to convert VM to unstructured for %s/%s: %v", namespace, name, err)
-		return fmt.Errorf("failed to convert VM to unstructured: %w", err)
+		logger.Error("Failed to compute VM patch for %s/%s: %v", namespace, name, err)
+		return fmt.Errorf("failed to compute VM patch: %w", err)
 	}
 
 	logger.Debug("VM spec after removing CD-ROM and volume")
 
-	// Update VM
+	// Apply patch
 	gvr := schema.GroupVersionResource{
 		Group:    "kubevirt.io",
 		Version:  "v1",
 		Resource: "virtualmachines",
 	}
 
-	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).Update(ctx, vmUnstructured, metav1.UpdateOptions{})
+	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
 	if err != nil {
 		logger.Error("Failed to update VM %s/%s after removing CD-ROM and volume: %v", namespace, name, err)
 		return fmt.Errorf("failed to update VM: %w", err)
@@ -3354,15 +3375,16 @@ func (c *Client) handleVMUpdate(vm *kubevirtv1.VirtualMachine) {
 			vmCopy.SetAnnotations(vmAnnotations)
 		}
 
-		// Update VM with restored boot order
-		ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
-		defer cancel()
-
-		vmUnstructured, err := vmToUnstructured(vmCopy)
+		// Compute merge patch from changes (preserves unknown fields)
+		patch, err := computeVMPatch(currentVM, vmCopy)
 		if err != nil {
-			logger.Error("Failed to convert VM to unstructured: %v", err)
+			logger.Error("Failed to compute VM patch: %v", err)
 			return
 		}
+
+		// Apply patch
+		ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+		defer cancel()
 
 		gvr := schema.GroupVersionResource{
 			Group:    "kubevirt.io",
@@ -3370,7 +3392,7 @@ func (c *Client) handleVMUpdate(vm *kubevirtv1.VirtualMachine) {
 			Resource: "virtualmachines",
 		}
 
-		_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).Update(ctx, vmUnstructured, metav1.UpdateOptions{})
+		_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
 		if err != nil {
 			logger.Error("Failed to update VM %s/%s with restored boot order: %v", namespace, name, err)
 			return
