@@ -1555,7 +1555,7 @@ func (c *Client) InsertVirtualMedia(namespace, name, mediaID, imageURL string) e
 	logger.Debug("DEBUG: Calling insertVirtualMediaAsync for VM %s/%s", namespace, name)
 	if err := c.insertVirtualMediaAsync(namespace, name, mediaID, imageURL); err != nil {
 		logger.Error("Failed to insert virtual media %s for VM %s/%s: %v", mediaID, namespace, name, err)
-	return err
+		return err
 	}
 
 	logger.Info("Successfully completed virtual media insertion %s for VM %s/%s", mediaID, namespace, name)
@@ -3134,59 +3134,6 @@ func (c *Client) getVMIUID(namespace, name string) string {
 		return ""
 	}
 	return string(vmi.GetUID())
-}
-
-// clearBootOnceState removes boot-once label and annotations from VM
-func (c *Client) clearBootOnceState(namespace, name string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
-	defer cancel()
-
-	// Get the current VM
-	vm, err := c.GetVM(namespace, name)
-	if err != nil {
-		return fmt.Errorf("failed to get VM %s: %w", name, err)
-	}
-
-	vmCopy := vm.DeepCopy()
-
-	// Remove the boot-once label
-	labels := vmCopy.GetLabels()
-	if labels != nil {
-		delete(labels, BootOnceLabel)
-		vmCopy.SetLabels(labels)
-	}
-
-	// Remove boot-once annotations
-	annotations := vmCopy.GetAnnotations()
-	if annotations != nil {
-		delete(annotations, BootOnceOriginalConfigAnnotation)
-		delete(annotations, BootOnceVMIUIDAnnotation)
-		delete(annotations, "redfish.boot.source.override.enabled")
-		delete(annotations, "redfish.boot.source.override.target")
-		delete(annotations, "redfish.boot.source.override.mode")
-		vmCopy.SetAnnotations(annotations)
-	}
-
-	// Convert to unstructured for dynamic client update
-	vmUnstructured, err := vmToUnstructured(vmCopy)
-	if err != nil {
-		return fmt.Errorf("failed to convert VM to unstructured: %w", err)
-	}
-
-	// Update VM
-	gvr := schema.GroupVersionResource{
-		Group:    "kubevirt.io",
-		Version:  "v1",
-		Resource: "virtualmachines",
-	}
-
-	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).Update(ctx, vmUnstructured, metav1.UpdateOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to clear boot-once state: %w", err)
-	}
-
-	logger.Info("Cleared boot-once state for VM %s/%s", namespace, name)
-	return nil
 }
 
 // =============================================================================
