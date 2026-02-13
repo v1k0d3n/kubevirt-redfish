@@ -3280,8 +3280,25 @@ func (c *Client) handleVMUpdate(vm *kubevirtv1.VirtualMachine) {
 	namespace := vm.GetNamespace()
 	name := vm.GetName()
 
-	// Get the boot-once annotations
-	annotations := vm.GetAnnotations()
+	logger.Debug("Handling VM update event for VM %s/%s", namespace, name)
+
+	// Get fresh VM to ensure we have current state (watch event may be stale)
+	currentVM, err := c.GetVM(namespace, name)
+	if err != nil {
+		logger.Error("Failed to get current VM %s/%s: %v", namespace, name, err)
+		return
+	}
+
+	// Check if boot-once label is still present
+	labels := currentVM.GetLabels()
+	if labels == nil || labels[BootOnceLabel] != "enabled" {
+		// Boot-once label not present or already cleared, nothing to do
+		logger.Debug("VM %s/%s does not have boot-once label, skipping", namespace, name)
+		return
+	}
+
+	// Get the boot-once annotations from the current VM
+	annotations := currentVM.GetAnnotations()
 	if annotations == nil {
 		return
 	}
@@ -3312,14 +3329,7 @@ func (c *Client) handleVMUpdate(vm *kubevirtv1.VirtualMachine) {
 		logger.Info("VMI UID changed for VM %s/%s (recorded: %s, current: %s), restoring boot order",
 			namespace, name, recordedVMIUID, currentVMIUID)
 
-		// Get fresh VM to avoid conflicts
-		freshVM, err := c.GetVM(namespace, name)
-		if err != nil {
-			logger.Error("Failed to get VM %s/%s for boot order restoration: %v", namespace, name, err)
-			return
-		}
-
-		vmCopy := freshVM.DeepCopy()
+		vmCopy := currentVM.DeepCopy()
 
 		// Restore the original boot order
 		if err := c.restoreBootOrder(vmCopy, originalConfig); err != nil {
