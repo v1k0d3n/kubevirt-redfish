@@ -1581,6 +1581,21 @@ func (s *Server) handleBootUpdate(w http.ResponseWriter, r *http.Request, system
 					}
 				}()
 
+				// When boot source override is set to Once, we need to set the boot once configuration
+				enabled, found := bootConfig["bootSourceOverrideEnabled"]
+				if found {
+					if enabled, ok := enabled.(string); ok {
+						if enabled == "Once" {
+							err = s.kubevirtClient.SetBootOnce(chassisConfig.Namespace, vmName, target)
+							if err != nil {
+								logger.Error("Failed to set boot order once for VM %s: %v", vmName, err)
+								// Don't fail the operation if boot order setting fails
+							}
+							return
+						}
+					}
+				}
+
 				err = s.kubevirtClient.SetBootOrder(chassisConfig.Namespace, vmName, target)
 				if err != nil {
 					logger.Error("Failed to set boot order for VM %s: %v", vmName, err)
