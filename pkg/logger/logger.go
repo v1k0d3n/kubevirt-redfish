@@ -374,7 +374,7 @@ func LogRequest(method, path, user string, correlationID string) {
 		"status":         "started",
 	}
 
-	InfoStructured("Redfish API request received", fields)
+	DebugStructured("Redfish API request received", fields)
 }
 
 // LogResponse logs a response with correlation ID and duration
@@ -390,7 +390,7 @@ func LogResponse(method, path, user string, correlationID string, statusCode int
 		"duration":       duration.String(),
 	}
 
-	InfoStructured("Redfish API response completed", fields)
+	DebugStructured("Redfish API response completed", fields)
 }
 
 // LogKubeVirtOperation logs a KubeVirt operation with correlation ID

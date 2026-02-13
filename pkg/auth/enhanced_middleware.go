@@ -528,7 +528,7 @@ func (m *EnhancedMiddleware) logSecurityEvent(event SecurityEvent) {
 	m.metrics.TotalAttempts++
 
 	// Log the event
-	logger.InfoStructured("Security event", map[string]interface{}{
+	logger.DebugStructured("Security event", map[string]interface{}{
 		"event_type":     event.EventType,
 		"username":       event.Username,
 		"ip_address":     event.IPAddress,

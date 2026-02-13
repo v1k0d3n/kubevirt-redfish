@@ -3219,6 +3219,8 @@ func (c *Client) runNamespaceWatcher(ctx context.Context, namespace string) {
 		// Reset backoff on successful watch creation
 		backoff = time.Second
 
+		logger.Info("Watch for namespace %s created.", namespace)
+
 		// Process watch events
 		c.processWatchEvents(ctx, namespace, watcher)
 
@@ -3240,6 +3242,8 @@ func (c *Client) processWatchEvents(ctx context.Context, namespace string, watch
 				// Channel closed, need to reconnect
 				return
 			}
+
+			logger.Info("Watch event received: %s for namespace %s", event.Type, namespace)
 
 			switch event.Type {
 			case watch.Added, watch.Modified:
