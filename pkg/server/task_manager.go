@@ -157,6 +157,27 @@ func (pq *PriorityQueue) Size() int {
 	return len(pq.jobs)
 }
 
+// RemoveMatching removes all jobs for which predicate returns true, and returns them.
+// The remaining jobs keep their relative order (and thus priority ordering).
+// Caller must hold no locks that could conflict with pq.mutex (e.g. do not hold taskMutex
+// if another goroutine might lock queue then taskMutex).
+func (pq *PriorityQueue) RemoveMatching(predicate func(*Job) bool) []*Job {
+	pq.mutex.Lock()
+	defer pq.mutex.Unlock()
+
+	kept := make([]*Job, 0, len(pq.jobs))
+	var removed []*Job
+	for _, j := range pq.jobs {
+		if predicate(j) {
+			removed = append(removed, j)
+		} else {
+			kept = append(kept, j)
+		}
+	}
+	pq.jobs = kept
+	return removed
+}
+
 // Worker represents a background worker that processes jobs
 type Worker struct {
 	ID      int
@@ -712,13 +733,16 @@ func (tm *TaskManager) CreateTask(name, namespace, vmName, mediaID, imageURL str
 }
 
 // CreatePowerResetTask creates a new task for power reset that waits for ISO to be ready
-// This is used when a Reset is requested but the virtual media (ISO) is still downloading
+// This is used when a Reset is requested but the virtual media (ISO) is still downloading.
+// Any existing pending power-reset job for the same VM is removed and its task marked as superseded.
 func (tm *TaskManager) CreatePowerResetTask(name, namespace, vmName, resetType, isoDownloadTimeout string) string {
 	logger.Debug("DEBUG: Creating power reset task - name=%s, namespace=%s, vmName=%s, resetType=%s, isoDownloadTimeout=%s",
 		name, namespace, vmName, resetType, isoDownloadTimeout)
 
 	tm.taskMutex.Lock()
 	defer tm.taskMutex.Unlock()
+
+	tm.cancelPendingPowerResetJobsForVM(namespace, vmName)
 
 	taskID := fmt.Sprintf("task-%d", time.Now().UnixNano())
 
@@ -841,6 +865,46 @@ func (tm *TaskManager) CompleteTask(taskID, finalMessage string) error {
 // FailTask marks a task as failed
 func (tm *TaskManager) FailTask(taskID, errorMessage string) error {
 	return tm.UpdateTaskState(taskID, redfish.TaskStateException, "Warning", errorMessage)
+}
+
+// failTaskLocked marks a task as failed. Caller must hold tm.taskMutex.
+func (tm *TaskManager) failTaskLocked(taskID, errorMessage string) error {
+	task, exists := tm.tasks[taskID]
+	if !exists {
+		return fmt.Errorf("task %s not found", taskID)
+	}
+	task.TaskState = redfish.TaskStateException
+	task.TaskStatus = "Warning"
+	if errorMessage != "" {
+		task.Messages = append(task.Messages, redfish.Message{Message: errorMessage})
+	}
+	now := time.Now()
+	task.EndTime = &now
+	tm.updateStats(0, false)
+	logger.Info("Updated task %s state to Exception: %s", taskID, errorMessage)
+	return nil
+}
+
+// cancelPendingPowerResetJobsForVM removes any pending PowerResetWithWait jobs for the given VM
+// from the queue and marks their tasks as failed (superseded). Caller must hold tm.taskMutex.
+func (tm *TaskManager) cancelPendingPowerResetJobsForVM(namespace, vmName string) {
+	removed := tm.priorityQueue.RemoveMatching(func(job *Job) bool {
+		if job.Type != TaskTypePowerResetWithWait {
+			return false
+		}
+		payload, ok := job.Payload.(map[string]string)
+		if !ok {
+			return false
+		}
+		return payload["namespace"] == namespace && payload["vmName"] == vmName
+	})
+	for _, job := range removed {
+		_ = tm.failTaskLocked(job.TaskID, "Superseded by new reset request")
+		tm.updateQueueStats(-1)
+	}
+	if len(removed) > 0 {
+		logger.Info("Cancelled %d pending power reset job(s) for VM %s/%s", len(removed), namespace, vmName)
+	}
 }
 
 // updateStats updates task statistics
