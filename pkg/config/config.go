@@ -315,10 +315,15 @@ func validateServerConfig(server *ServerConfig) error {
 		return errors.NewValidationError("Invalid server port", fmt.Sprintf("server.port must be between 1 and 65535, got %d", server.Port))
 	}
 
-	// Use number of CPUs as the maximum number of workers to avoid overwhelming the system
+	// Use number of CPUs as the maximum number of workers to avoid overwhelming the system.
+	// Cap to maxWorkers instead of failing so configs with e.g. worker_count: 10 remain portable on CI/small machines.
 	maxWorkers := runtime.NumCPU()
-	if server.WorkerCount < 1 || server.WorkerCount > maxWorkers {
-		return errors.NewValidationError("Invalid worker count", fmt.Sprintf("server.worker_count must be between 1 and %d (number of CPUs), got %d", maxWorkers, server.WorkerCount))
+	if server.WorkerCount < 1 {
+		return errors.NewValidationError("Invalid worker count", fmt.Sprintf("server.worker_count must be at least 1, got %d", server.WorkerCount))
+	}
+	if server.WorkerCount > maxWorkers {
+		logger.Warning("server.worker_count %d exceeds NumCPU()=%d; capping to %d for portability", server.WorkerCount, maxWorkers, maxWorkers)
+		server.WorkerCount = maxWorkers
 	}
 
 	if server.TLS.Enabled {

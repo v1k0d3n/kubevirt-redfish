@@ -495,7 +495,11 @@ func (w *Worker) processPowerResetWithWait(job *Job) error {
 			logger.Error("Failed to update task progress for job %s: %v", job.ID, err)
 		}
 
-		time.Sleep(retryInterval)
+		select {
+		case <-w.ctx.Done():
+			return fmt.Errorf("worker context cancelled while waiting for virtual media to be ready")
+		case <-time.After(retryInterval):
+		}
 	}
 
 	// Now execute the power action

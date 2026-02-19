@@ -1924,6 +1924,11 @@ func (s *Server) handlePowerAction(w http.ResponseWriter, r *http.Request, syste
 			ready = false // Treat as not ready to be safe
 		}
 		if !ready {
+			if s.taskManager == nil {
+				logger.Warning("Task manager not available, cannot create async reset task for VM %s/%s", namespace, vmName)
+				s.sendInternalError(w, "Task manager not available for async power reset")
+				return
+			}
 			// ISO is not ready - create an async task to wait and then execute reset
 			logger.Info("Virtual media not ready for VM %s/%s, creating async task: %s", namespace, vmName, message)
 
