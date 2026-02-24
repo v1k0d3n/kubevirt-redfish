@@ -24,7 +24,6 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"io"
 	"math/big"
@@ -37,9 +36,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"mime/multipart"
-	"reflect"
 
 	"github.com/v1k0d3n/kubevirt-redfish/pkg/logger"
 
@@ -170,16 +166,6 @@ func vmiToUnstructured(vmi *kubevirtv1.VirtualMachineInstance) (*unstructured.Un
 	u.SetAPIVersion("kubevirt.io/v1")
 	u.SetKind("VirtualMachineInstance")
 	return u, nil
-}
-
-// unstructuredToDataVolume converts an unstructured object to a typed DataVolume
-func unstructuredToDataVolume(u *unstructured.Unstructured) (*cdiv1beta1.DataVolume, error) {
-	dv := &cdiv1beta1.DataVolume{}
-	err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, dv)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert unstructured to DataVolume: %w", err)
-	}
-	return dv, nil
 }
 
 // volumeImportSourceToUnstructured converts a typed VolumeImportSource to an unstructured object
@@ -1914,89 +1900,6 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 	return nil
 }
 
-// uploadISOToDataVolume uploads an ISO file to a DataVolume using the CDI upload proxy
-func (c *Client) uploadISOToDataVolume(namespace, dataVolumeName, filePath string) error {
-	logger.Info("Uploading ISO file %s to DataVolume %s", filePath, dataVolumeName)
-
-	// Get the upload proxy URL
-	uploadProxyURL, err := c.getUploadProxyURL()
-	if err != nil {
-		return fmt.Errorf("failed to get upload proxy URL: %w", err)
-	}
-
-	// Open the file
-	file, err := os.Open(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to open file %s: %w", filePath, err)
-	}
-	defer file.Close()
-
-	// Create the upload URL
-	uploadURL := fmt.Sprintf("%s/v1alpha1/upload", uploadProxyURL)
-
-	// Create HTTP client
-	client := &http.Client{
-		Timeout: 30 * time.Minute, // Long timeout for large uploads
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, //nolint:gosec // Allow self-signed certificates for internal CDI communication
-			},
-		},
-	}
-
-	// Create a pipe for streaming the multipart form
-	pr, pw := io.Pipe()
-	writer := multipart.NewWriter(pw)
-
-	// Start writing the multipart form in a goroutine
-	go func() {
-		defer pw.Close()
-		defer writer.Close()
-
-		// Add the file
-		part, err := writer.CreateFormFile("file", filepath.Base(filePath))
-		if err != nil {
-			logger.Error("Failed to create form file: %v", err)
-			return
-		}
-
-		// Stream the file content
-		if _, err := io.Copy(part, file); err != nil {
-			logger.Error("Failed to copy file content: %v", err)
-			return
-		}
-
-		// Add the DataVolume name
-		if err := writer.WriteField("token", dataVolumeName); err != nil {
-			logger.Error("Failed to write token field: %v", err)
-			return
-		}
-	}()
-
-	// Create the request with streaming body
-	req, err := http.NewRequest("POST", uploadURL, pr)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	// Send the request
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to upload file: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("upload failed with status %d: %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	logger.Info("Successfully uploaded ISO to DataVolume %s", dataVolumeName)
-	return nil
-}
-
 // copyISOToPVC creates a helper pod that downloads an ISO and writes it to a PVC.
 // The function returns immediately after creating the pod -- the import pod watcher
 // handles completion detection, VM label cleanup, and pod deletion.
@@ -2171,210 +2074,6 @@ func resourceMustParse(s string) resource.Quantity {
 // stringPtr returns a pointer to the string value
 func stringPtr(s string) *string {
 	return &s
-}
-
-// getUploadProxyURL gets the CDI upload proxy URL using configuration-driven service discovery
-func (c *Client) getUploadProxyURL() (string, error) {
-	// Check if kubernetesClient is initialized
-	if c.kubernetesClient == nil {
-		return "", fmt.Errorf("kubernetes client is not initialized")
-	}
-
-	correlationID := logger.GetCorrelationID(context.Background())
-
-	// Get CDI namespaces from appConfig using reflection to avoid import cycle
-	serviceName := "cdi-uploadproxy"
-	namespaces := []string{"openshift-cnv", "cdi", "kubevirt-cdi"} // Default fallback
-
-	// Try to extract CDI namespaces from appConfig if available
-	if c.appConfig != nil {
-		// Use reflection to safely extract CDI configuration without import cycle
-		if reflect.TypeOf(c.appConfig).String() == "*config.Config" {
-			configValue := reflect.ValueOf(c.appConfig).Elem()
-			if cdiField := configValue.FieldByName("CDI"); cdiField.IsValid() {
-				if uploadProxyField := cdiField.FieldByName("UploadProxy"); uploadProxyField.IsValid() {
-					if namespacesField := uploadProxyField.FieldByName("Namespaces"); namespacesField.IsValid() && namespacesField.Kind() == reflect.Slice {
-						if namespacesField.Len() > 0 {
-							extractedNamespaces := make([]string, namespacesField.Len())
-							for i := 0; i < namespacesField.Len(); i++ {
-								extractedNamespaces[i] = namespacesField.Index(i).String()
-							}
-							namespaces = extractedNamespaces
-						}
-					}
-					if serviceNameField := uploadProxyField.FieldByName("ServiceName"); serviceNameField.IsValid() && serviceNameField.String() != "" {
-						serviceName = serviceNameField.String()
-					}
-				}
-			}
-		}
-	}
-
-	// Try to find the service in configured namespaces
-	var svc *corev1.Service
-	var err error
-	var foundNamespace string
-
-	for _, namespace := range namespaces {
-		logger.DebugStructured("Searching for CDI upload proxy service", map[string]interface{}{
-			"correlation_id": correlationID,
-			"service_name":   serviceName,
-			"namespace":      namespace,
-			"operation":      "cdi_service_discovery",
-		})
-
-		svc, err = c.kubernetesClient.CoreV1().Services(namespace).Get(context.Background(), serviceName, metav1.GetOptions{})
-		if err == nil {
-			foundNamespace = namespace
-			logger.InfoStructured("Found CDI upload proxy service", map[string]interface{}{
-				"correlation_id": correlationID,
-				"service_name":   serviceName,
-				"namespace":      foundNamespace,
-				"operation":      "cdi_service_discovery",
-			})
-			break
-		}
-
-		logger.DebugStructured("CDI upload proxy service not found in namespace", map[string]interface{}{
-			"correlation_id": correlationID,
-			"service_name":   serviceName,
-			"namespace":      namespace,
-			"error":          err.Error(),
-			"operation":      "cdi_service_discovery",
-		})
-	}
-
-	if svc == nil {
-		logger.ErrorStructured("Failed to find CDI upload proxy service in any configured namespace", map[string]interface{}{
-			"correlation_id":      correlationID,
-			"service_name":        serviceName,
-			"searched_namespaces": namespaces,
-			"operation":           "cdi_service_discovery",
-		})
-		return "", fmt.Errorf("failed to find CDI upload proxy service '%s' in namespaces %v: %w", serviceName, namespaces, err)
-	}
-
-	// Use the service URL
-	return fmt.Sprintf("https://%s.%s.svc.cluster.local:443", svc.Name, svc.Namespace), nil
-}
-
-// createCertConfigMap creates a ConfigMap with CA certificate for HTTPS imports
-func (c *Client) createCertConfigMap(namespace, configMapName, imageURL string) error {
-	// Extract hostname from URL
-	u, err := url.Parse(imageURL)
-	if err != nil {
-		return fmt.Errorf("failed to parse URL %s: %w", imageURL, err)
-	}
-
-	// Fetch the certificate from the server
-	certPEM, err := c.fetchServerCertificate(u.Host)
-	if err != nil {
-		logger.Warning("Failed to fetch certificate from %s: %v", u.Host, err)
-		// Create a ConfigMap with a comment explaining the issue
-		configMap := &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      configMapName,
-				Namespace: namespace,
-			},
-			Data: map[string]string{
-				"ca.crt": fmt.Sprintf("# Failed to fetch certificate from %s\n# Error: %v\n# Please manually add the CA certificate here", u.Host, err),
-			},
-		}
-
-		_, err = c.kubernetesClient.CoreV1().ConfigMaps(namespace).Create(context.Background(), configMap, metav1.CreateOptions{})
-		if err != nil && !strings.Contains(err.Error(), "already exists") {
-			return fmt.Errorf("failed to create cert ConfigMap %s: %w", configMapName, err)
-		}
-		return fmt.Errorf("certificate fetch failed: %w", err)
-	}
-
-	// Create ConfigMap with the actual certificate
-	configMap := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      configMapName,
-			Namespace: namespace,
-		},
-		Data: map[string]string{
-			"ca.crt": certPEM,
-		},
-	}
-
-	_, err = c.kubernetesClient.CoreV1().ConfigMaps(namespace).Create(context.Background(), configMap, metav1.CreateOptions{})
-	if err != nil {
-		if strings.Contains(err.Error(), "already exists") {
-			logger.Info("Cert ConfigMap %s already exists", configMapName)
-			return nil
-		}
-		return fmt.Errorf("failed to create cert ConfigMap %s: %w", configMapName, err)
-	}
-
-	logger.Info("Created cert ConfigMap %s for host %s", configMapName, u.Host)
-	return nil
-}
-
-// fetchServerCertificate fetches the certificate from an HTTPS server
-func (c *Client) fetchServerCertificate(host string) (string, error) {
-	// Create a connection to get the certificate
-	conn, err := tls.Dial("tcp", host, &tls.Config{
-		InsecureSkipVerify: true, //nolint:gosec // We're fetching the cert to verify it later
-	})
-	if err != nil {
-		return "", fmt.Errorf("failed to connect to %s: %w", host, err)
-	}
-	defer conn.Close()
-
-	// Get the certificate chain
-	certs := conn.ConnectionState().PeerCertificates
-	if len(certs) == 0 {
-		return "", fmt.Errorf("no certificates received from %s", host)
-	}
-
-	// For now, use the server certificate itself as the CA
-	// In production, you might want to extract the CA certificate from the chain
-	cert := certs[0]
-
-	// Convert certificate to PEM format
-	certPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: cert.Raw,
-	})
-
-	if certPEM == nil {
-		return "", fmt.Errorf("failed to encode certificate to PEM")
-	}
-
-	return string(certPEM), nil
-}
-
-// IsDataVolumeReady checks if a DataVolume is in Ready state
-func (c *Client) IsDataVolumeReady(namespace, name string) (bool, error) {
-	// Check if dynamicClient is initialized
-	if c.dynamicClient == nil {
-		return false, fmt.Errorf("dynamic client is not initialized")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
-	defer cancel()
-
-	gvr := schema.GroupVersionResource{
-		Group:    "cdi.kubevirt.io",
-		Version:  "v1beta1",
-		Resource: "datavolumes",
-	}
-
-	dvUnstructured, err := c.dynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		return false, fmt.Errorf("failed to get DataVolume %s: %w", name, err)
-	}
-
-	// Convert to typed DataVolume
-	dv, err := unstructuredToDataVolume(dvUnstructured)
-	if err != nil {
-		return false, fmt.Errorf("failed to convert DataVolume %s: %w", name, err)
-	}
-
-	// Check if DataVolume is ready using typed phase constant
-	return dv.Status.Phase == cdiv1beta1.Succeeded, nil
 }
 
 // SetBootOrder sets the boot order for a VM to prioritize the selected device.
@@ -2959,53 +2658,6 @@ func (c *Client) getKubeVirtConfig() (apiVersion string, timeout int, allowInsec
 
 	logger.Info("Final KubeVirt config: apiVersion=%s, timeout=%d, allowInsecureTLS=%v", apiVersion, timeout, allowInsecureTLS)
 	return apiVersion, timeout, allowInsecureTLS
-}
-
-// cleanupExistingDataVolume removes an existing DataVolume if it exists and is in a failed state
-func (c *Client) cleanupExistingDataVolume(namespace, dataVolumeName string) error {
-	// Check if dynamicClient is initialized
-	if c.dynamicClient == nil {
-		return fmt.Errorf("dynamic client is not initialized")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
-	defer cancel()
-
-	gvr := schema.GroupVersionResource{
-		Group:    "cdi.kubevirt.io",
-		Version:  "v1beta1",
-		Resource: "datavolumes",
-	}
-
-	// Check if DataVolume exists
-	dvUnstructured, err := c.dynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, dataVolumeName, metav1.GetOptions{})
-	if err != nil {
-		// DataVolume doesn't exist, nothing to clean up
-		return nil
-	}
-
-	// Convert to typed DataVolume
-	dv, err := unstructuredToDataVolume(dvUnstructured)
-	if err != nil {
-		// If conversion fails, log and skip cleanup
-		logger.Warning("Failed to convert DataVolume %s for cleanup check: %v", dataVolumeName, err)
-		return nil
-	}
-
-	// Check if DataVolume is in a failed or in-progress state using typed phase constants
-	if dv.Status.Phase == cdiv1beta1.ImportInProgress || dv.Status.Phase == cdiv1beta1.Failed {
-		logger.Info("Cleaning up existing DataVolume %s in state %s", dataVolumeName, dv.Status.Phase)
-
-		// Delete the DataVolume
-		err = c.dynamicClient.Resource(gvr).Namespace(namespace).Delete(ctx, dataVolumeName, metav1.DeleteOptions{})
-		if err != nil {
-			return fmt.Errorf("failed to delete existing DataVolume %s: %w", dataVolumeName, err)
-		}
-
-		logger.Info("Successfully cleaned up existing DataVolume %s", dataVolumeName)
-	}
-
-	return nil
 }
 
 // generateUniquePVCName generates a unique PVC name with timestamp and random suffix

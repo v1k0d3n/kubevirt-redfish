@@ -671,23 +671,6 @@ func TestClient_UnpauseVMI(t *testing.T) {
 	}
 }
 
-func TestClient_FetchServerCertificate(t *testing.T) {
-	// Create a mock client
-	client := &Client{}
-
-	// Test with invalid host
-	_, err := client.fetchServerCertificate("")
-	if err == nil {
-		t.Error("Expected error with empty host")
-	}
-
-	// Test with invalid host format
-	_, err = client.fetchServerCertificate("invalid-host")
-	if err == nil {
-		t.Error("Expected error with invalid host format")
-	}
-}
-
 // =============================================================================
 // EDGE CASES AND ERROR CONDITIONS
 // =============================================================================
@@ -738,30 +721,6 @@ func TestVMSelectorConfig_Validation(t *testing.T) {
 	}
 	if len(selector.Names) != 2 || selector.Names[0] != "vm1" || selector.Names[1] != "vm2" {
 		t.Error("Names should be set correctly")
-	}
-}
-
-// Test fetchServerCertificate function with empty host
-func TestClient_FetchServerCertificate_EmptyHost(t *testing.T) {
-	// Test with empty host
-	client := &Client{
-		timeout: 30 * time.Second,
-	}
-	_, err := client.fetchServerCertificate("")
-	if err == nil {
-		t.Error("Expected error with empty host")
-	}
-}
-
-// Test fetchServerCertificate function with invalid host
-func TestClient_FetchServerCertificate_InvalidHost(t *testing.T) {
-	// Test with invalid host
-	client := &Client{
-		timeout: 30 * time.Second,
-	}
-	_, err := client.fetchServerCertificate("invalid-host:invalid-port")
-	if err == nil {
-		t.Error("Expected error with invalid host")
 	}
 }
 
