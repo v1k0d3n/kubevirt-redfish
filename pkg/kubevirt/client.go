@@ -3256,7 +3256,7 @@ func (c *Client) processWatchEvents(ctx context.Context, namespace string, watch
 				return
 			}
 
-			logger.Info("Watch event received: %s for namespace %s", event.Type, namespace)
+			logger.Debug("Watch event received: %s for namespace %s", event.Type, namespace)
 
 			switch event.Type {
 			case watch.Added, watch.Modified:
