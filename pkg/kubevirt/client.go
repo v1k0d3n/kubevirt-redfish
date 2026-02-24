@@ -1575,28 +1575,28 @@ func (c *Client) downloadISO(imageURL string) (string, error) {
 // InsertVirtualMedia inserts virtual media into a VirtualMachine
 func (c *Client) InsertVirtualMedia(namespace, name, mediaID, imageURL string) error {
 	logger.Info("Inserting virtual media %s with image %s for VM %s/%s", mediaID, imageURL, namespace, name)
-	logger.Debug("DEBUG: InsertVirtualMedia called - namespace=%s, name=%s, mediaID=%s, imageURL=%s", namespace, name, mediaID, imageURL)
+	logger.Debug("InsertVirtualMedia called - namespace=%s, name=%s, mediaID=%s, imageURL=%s", namespace, name, mediaID, imageURL)
 
 	// Perform the actual insertion work
-	logger.Debug("DEBUG: Calling insertVirtualMediaAsync for VM %s/%s", namespace, name)
+	logger.Debug("Calling insertVirtualMediaAsync for VM %s/%s", namespace, name)
 	if err := c.insertVirtualMediaAsync(namespace, name, mediaID, imageURL); err != nil {
 		logger.Error("Failed to insert virtual media %s for VM %s/%s: %v", mediaID, namespace, name, err)
 		return err
 	}
 
 	logger.Info("Successfully completed virtual media insertion %s for VM %s/%s", mediaID, namespace, name)
-	logger.Debug("DEBUG: Virtual media insertion completed successfully for VM %s/%s", namespace, name)
+	logger.Debug("Virtual media insertion completed successfully for VM %s/%s", namespace, name)
 	return nil
 }
 
 // insertVirtualMediaAsync performs the actual virtual media insertion work
 func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL string) error {
-	logger.Debug("DEBUG: insertVirtualMediaAsync called - namespace=%s, name=%s, mediaID=%s, imageURL=%s", namespace, name, mediaID, imageURL)
+	logger.Debug("insertVirtualMediaAsync called - namespace=%s, name=%s, mediaID=%s, imageURL=%s", namespace, name, mediaID, imageURL)
 
 	// Get DataVolume configuration first to determine timeouts
 	storageSize, allowInsecureTLS, storageClass, vmUpdateTimeout, isoDownloadTimeout, helperImage := c.getDataVolumeConfig()
 	logger.Info("Using DataVolume config: storageSize=%s, allowInsecureTLS=%v, storageClass=%s, vmUpdateTimeout=%s, isoDownloadTimeout=%s, helperImage=%s", storageSize, allowInsecureTLS, storageClass, vmUpdateTimeout, isoDownloadTimeout, helperImage)
-	logger.Debug("DEBUG: DataVolume config - storageSize=%s, allowInsecureTLS=%v, storageClass=%s, vmUpdateTimeout=%s, isoDownloadTimeout=%s, helperImage=%s", storageSize, allowInsecureTLS, storageClass, vmUpdateTimeout, isoDownloadTimeout, helperImage)
+	logger.Debug("DataVolume config - storageSize=%s, allowInsecureTLS=%v, storageClass=%s, vmUpdateTimeout=%s, isoDownloadTimeout=%s, helperImage=%s", storageSize, allowInsecureTLS, storageClass, vmUpdateTimeout, isoDownloadTimeout, helperImage)
 
 	// Parse timeout for VM update
 	vmUpdateDuration, err := time.ParseDuration(vmUpdateTimeout)
@@ -1604,14 +1604,14 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 		logger.Warning("Invalid vm_update_timeout %s, using default 30s: %v", vmUpdateTimeout, err)
 		vmUpdateDuration = 30 * time.Second
 	}
-	logger.Debug("DEBUG: Using VM update timeout: %v", vmUpdateDuration)
+	logger.Debug("Using VM update timeout: %v", vmUpdateDuration)
 
 	// Use VM update timeout for this operation
 	ctx, cancel := context.WithTimeout(context.Background(), vmUpdateDuration)
 	defer cancel()
 
 	logger.Info("Inserting virtual media %s with image %s for VM %s/%s", mediaID, imageURL, namespace, name)
-	logger.Debug("DEBUG: Starting virtual media insertion process for VM %s/%s", namespace, name)
+	logger.Debug("Starting virtual media insertion process for VM %s/%s", namespace, name)
 
 	// Parse URL to determine scheme
 	u, parseErr := url.Parse(imageURL)
@@ -1619,28 +1619,28 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 		logger.Error("Failed to parse URL %s: %v", imageURL, parseErr)
 		return fmt.Errorf("failed to parse URL %s: %w", imageURL, parseErr)
 	}
-	logger.Debug("DEBUG: Parsed URL - scheme=%s, host=%s", u.Scheme, u.Host)
+	logger.Debug("Parsed URL - scheme=%s, host=%s", u.Scheme, u.Host)
 
 	// Generate unique PVC name with timestamp and random suffix to avoid conflicts
 	dataVolumeName := c.generateUniquePVCName(name)
-	logger.Debug("DEBUG: Generated unique dataVolumeName=%s", dataVolumeName)
+	logger.Debug("Generated unique dataVolumeName=%s", dataVolumeName)
 
 	// First, create the CD-ROM device in the VM spec
 	// Use lowercase device name for KubeVirt compatibility
 	deviceName := "cdrom0"
 	logger.Info("Creating CD-ROM device %s in VM spec first", deviceName)
-	logger.Debug("DEBUG: Creating CD-ROM device %s in VM spec", deviceName)
+	logger.Debug("Creating CD-ROM device %s in VM spec", deviceName)
 
 	maxRetries := 3
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		logger.Debug("DEBUG: VM update attempt %d/%d", attempt, maxRetries)
+		logger.Debug("VM update attempt %d/%d", attempt, maxRetries)
 
 		vm, err := c.GetVM(namespace, name)
 		if err != nil {
 			logger.Error("Failed to get VM %s/%s: %v", namespace, name, err)
 			return fmt.Errorf("failed to get VM %s: %w", name, err)
 		}
-		logger.Debug("DEBUG: Successfully retrieved VM %s/%s", namespace, name)
+		logger.Debug("Successfully retrieved VM %s/%s", namespace, name)
 
 		vmCopy := vm.DeepCopy()
 
@@ -1656,7 +1656,7 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 			if disk.Name == deviceName {
 				diskExists = true
 				existingDiskIndex = i
-				logger.Debug("DEBUG: Found existing disk %s at index %d", deviceName, i)
+				logger.Debug("Found existing disk %s at index %d", deviceName, i)
 				break
 			}
 		}
@@ -1664,7 +1664,7 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 		if diskExists {
 			// Disk already exists, no need to add
 			logger.Info("CD-ROM device %s already exists", deviceName)
-			logger.Debug("DEBUG: CD-ROM device %s already exists at index %d", deviceName, existingDiskIndex)
+			logger.Debug("CD-ROM device %s already exists at index %d", deviceName, existingDiskIndex)
 		} else {
 			// Add new CD-ROM disk
 			newDisk := kubevirtv1.Disk{
@@ -1677,7 +1677,7 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 			}
 			vmCopy.Spec.Template.Spec.Domain.Devices.Disks = append(vmCopy.Spec.Template.Spec.Domain.Devices.Disks, newDisk)
 			logger.Info("Added new CD-ROM device %s", deviceName)
-			logger.Debug("DEBUG: Added new CD-ROM device %s", deviceName)
+			logger.Debug("Added new CD-ROM device %s", deviceName)
 		}
 
 		// Check if volume already exists
@@ -1685,7 +1685,7 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 		for _, volume := range vmCopy.Spec.Template.Spec.Volumes {
 			if volume.Name == deviceName {
 				volumeExists = true
-				logger.Debug("DEBUG: Found existing volume %s", deviceName)
+				logger.Debug("Found existing volume %s", deviceName)
 				break
 			}
 		}
@@ -1704,10 +1704,10 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 			}
 			vmCopy.Spec.Template.Spec.Volumes = append(vmCopy.Spec.Template.Spec.Volumes, newVolume)
 			logger.Info("Added new volume reference %s for PVC %s", deviceName, dataVolumeName)
-			logger.Debug("DEBUG: Added new volume reference %s for PVC %s", deviceName, dataVolumeName)
+			logger.Debug("Added new volume reference %s for PVC %s", deviceName, dataVolumeName)
 		} else {
 			logger.Info("Volume reference %s already exists", deviceName)
-			logger.Debug("DEBUG: Volume reference %s already exists", deviceName)
+			logger.Debug("Volume reference %s already exists", deviceName)
 		}
 
 		// Compute merge patch from changes (preserves unknown fields)
@@ -1723,12 +1723,12 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 			Resource: "virtualmachines",
 		}
 
-		logger.Debug("DEBUG: Updating VM %s/%s with new CD-ROM device", namespace, name)
+		logger.Debug("Updating VM %s/%s with new CD-ROM device", namespace, name)
 		_, err = c.dynamicClient.Resource(gvrVM).Namespace(namespace).Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
 		if err != nil {
 			if strings.Contains(err.Error(), "the object has been modified") && attempt < maxRetries {
 				logger.Info("Concurrent modification detected, retrying VM update (attempt %d/%d)", attempt, maxRetries)
-				logger.Debug("DEBUG: Concurrent modification detected, retrying VM update (attempt %d/%d)", attempt, maxRetries)
+				logger.Debug("Concurrent modification detected, retrying VM update (attempt %d/%d)", attempt, maxRetries)
 				time.Sleep(time.Duration(attempt) * time.Second)
 				continue
 			}
@@ -1736,17 +1736,17 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 			return fmt.Errorf("failed to update VM: %w", err)
 		}
 
-		logger.Debug("DEBUG: Successfully updated VM %s/%s on attempt %d", namespace, name, attempt)
+		logger.Debug("Successfully updated VM %s/%s on attempt %d", namespace, name, attempt)
 		break
 	}
 
 	logger.Info("Successfully created CD-ROM device %s in VM spec", deviceName)
-	logger.Debug("DEBUG: Successfully created CD-ROM device %s in VM spec for VM %s/%s", deviceName, namespace, name)
+	logger.Debug("Successfully created CD-ROM device %s in VM spec for VM %s/%s", deviceName, namespace, name)
 
 	// Now create the PVC and import the ISO
 	if allowInsecureTLS && u.Scheme == "https" {
 		logger.Info("Using helper pod for ISO import due to allowInsecureTLS=true and HTTPS URL")
-		logger.Debug("DEBUG: Using helper pod approach for HTTPS URL with allowInsecureTLS=true")
+		logger.Debug("Using helper pod approach for HTTPS URL with allowInsecureTLS=true")
 
 		// Create blank PVC with Block volume mode for ISO files
 		volumeMode := corev1.PersistentVolumeBlock
@@ -1770,10 +1770,10 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 		if storageClass != "" {
 			pvc.Spec.StorageClassName = &storageClass
 			logger.Info("Set storage class %s for PVC %s", storageClass, dataVolumeName)
-			logger.Debug("DEBUG: Set storage class %s for PVC %s", storageClass, dataVolumeName)
+			logger.Debug("Set storage class %s for PVC %s", storageClass, dataVolumeName)
 		}
 
-		logger.Debug("DEBUG: Creating PVC %s in namespace %s", dataVolumeName, namespace)
+		logger.Debug("Creating PVC %s in namespace %s", dataVolumeName, namespace)
 
 		// Check if PVC already exists and validate its state
 		existingPVC, err := c.kubernetesClient.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, dataVolumeName, metav1.GetOptions{})
@@ -1781,10 +1781,10 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 			// PVC exists, check its state
 			if c.isPVCUsable(existingPVC) {
 				logger.Info("PVC %s already exists and is usable, reusing it", dataVolumeName)
-				logger.Debug("DEBUG: PVC %s already exists and is usable, reusing it", dataVolumeName)
+				logger.Debug("PVC %s already exists and is usable, reusing it", dataVolumeName)
 			} else {
 				logger.Info("PVC %s exists but is not usable (status: %s), deleting and recreating", dataVolumeName, existingPVC.Status.Phase)
-				logger.Debug("DEBUG: PVC %s exists but is not usable, deleting and recreating", dataVolumeName)
+				logger.Debug("PVC %s exists but is not usable, deleting and recreating", dataVolumeName)
 				// Delete the unusable PVC
 				err = c.kubernetesClient.CoreV1().PersistentVolumeClaims(namespace).Delete(ctx, dataVolumeName, metav1.DeleteOptions{})
 				if err != nil {
@@ -1802,7 +1802,7 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 			_, createErr = c.kubernetesClient.CoreV1().PersistentVolumeClaims(namespace).Create(ctx, pvc, metav1.CreateOptions{})
 			if createErr != nil {
 				if strings.Contains(createErr.Error(), "already exists") {
-					logger.Debug("DEBUG: PVC %s already exists (race condition), will use existing PVC", dataVolumeName)
+					logger.Debug("PVC %s already exists (race condition), will use existing PVC", dataVolumeName)
 					// PVC already exists, we can use it
 					return nil // Success - we'll use the existing PVC
 				}
@@ -1817,7 +1817,7 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 		}
 
 		logger.Info("Created new PVC %s for virtual media", dataVolumeName)
-		logger.Debug("DEBUG: Successfully created new PVC %s for virtual media", dataVolumeName)
+		logger.Debug("Successfully created new PVC %s for virtual media", dataVolumeName)
 
 		// Create helper pod to copy ISO to PVC (non-blocking, pod watcher handles completion)
 		if err := c.copyISOToPVC(namespace, dataVolumeName, imageURL, isoDownloadTimeout, name, deviceName); err != nil {
@@ -1826,11 +1826,11 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 		}
 		logger.Info("Helper pod created for ISO import to PVC %s", dataVolumeName)
 	} else {
-		logger.Debug("DEBUG: Using CDI HTTP import approach for URL scheme %s", u.Scheme)
+		logger.Debug("Using CDI HTTP import approach for URL scheme %s", u.Scheme)
 		// CDI HTTP import for HTTP or valid HTTPS
 		logger.Info("Using CDI HTTP import for ISO")
 		volumeImportSourceName := sanitizeResourceName(fmt.Sprintf("%s-populator", dataVolumeName))
-		logger.Debug("DEBUG: Generated volumeImportSourceName=%s", volumeImportSourceName)
+		logger.Debug("Generated volumeImportSourceName=%s", volumeImportSourceName)
 
 		// Create typed VolumeImportSource
 		volumeImportSource := &cdiv1beta1.VolumeImportSource{

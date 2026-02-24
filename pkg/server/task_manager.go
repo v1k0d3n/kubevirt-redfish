@@ -192,18 +192,18 @@ func (w *Worker) Stop() {
 
 // work is the main work loop for a worker
 func (w *Worker) work() {
-	logger.Debug("DEBUG: Worker %d starting work loop", w.ID)
+	logger.Debug("Worker %d starting work loop", w.ID)
 	for {
 		select {
 		case <-w.ctx.Done():
-			logger.Debug("DEBUG: Worker %d context cancelled, stopping work loop", w.ID)
+			logger.Debug("Worker %d context cancelled, stopping work loop", w.ID)
 			return
 		case job := <-w.jobChan:
 			if job == nil {
-				logger.Debug("DEBUG: Worker %d received nil job, continuing", w.ID)
+				logger.Debug("Worker %d received nil job, continuing", w.ID)
 				continue
 			}
-			logger.Debug("DEBUG: Worker %d received job %s (task %s) from channel", w.ID, job.ID, job.TaskID)
+			logger.Debug("Worker %d received job %s (task %s) from channel", w.ID, job.ID, job.TaskID)
 			w.processJob(job)
 		}
 	}
@@ -214,17 +214,17 @@ func (w *Worker) processJob(job *Job) {
 	// Check for nil job to prevent panic
 	if job == nil {
 		logger.Warning("Worker %d received nil job, skipping", w.ID)
-		logger.Debug("DEBUG: Worker %d skipping nil job", w.ID)
+		logger.Debug("Worker %d skipping nil job", w.ID)
 		return
 	}
 
 	startTime := time.Now()
-	logger.Debug("DEBUG: Worker %d starting to process job %s (task %s) at %v", w.ID, job.ID, job.TaskID, startTime)
+	logger.Debug("Worker %d starting to process job %s (task %s) at %v", w.ID, job.ID, job.TaskID, startTime)
 
 	logger.Info("Worker %d processing job %s (task %s)", w.ID, job.ID, job.TaskID)
 
 	// Update task state to running
-	logger.Debug("DEBUG: Worker %d updating task %s state to Running", w.ID, job.TaskID)
+	logger.Debug("Worker %d updating task %s state to Running", w.ID, job.TaskID)
 	if err := w.taskMgr.UpdateTaskState(job.TaskID, redfish.TaskStateRunning, "OK", "Processing started"); err != nil {
 		logger.Error("Failed to update task state for job %s: %v", job.ID, err)
 	}
@@ -233,54 +233,54 @@ func (w *Worker) processJob(job *Job) {
 	var err error
 	switch job.Type {
 	case TaskTypeVirtualMediaInsert:
-		logger.Debug("DEBUG: Worker %d processing VirtualMediaInsert job %s", w.ID, job.ID)
+		logger.Debug("Worker %d processing VirtualMediaInsert job %s", w.ID, job.ID)
 		err = w.processVirtualMediaInsert(job)
 	case TaskTypeVirtualMediaEject:
-		logger.Debug("DEBUG: Worker %d processing VirtualMediaEject job %s", w.ID, job.ID)
+		logger.Debug("Worker %d processing VirtualMediaEject job %s", w.ID, job.ID)
 		err = w.processVirtualMediaEject(job)
 	case TaskTypePowerAction:
-		logger.Debug("DEBUG: Worker %d processing PowerAction job %s", w.ID, job.ID)
+		logger.Debug("Worker %d processing PowerAction job %s", w.ID, job.ID)
 		err = w.processPowerAction(job)
 	case TaskTypeBootUpdate:
-		logger.Debug("DEBUG: Worker %d processing BootUpdate job %s", w.ID, job.ID)
+		logger.Debug("Worker %d processing BootUpdate job %s", w.ID, job.ID)
 		err = w.processBootUpdate(job)
 	default:
-		logger.Debug("DEBUG: Worker %d received unknown job type %s for job %s", w.ID, job.Type, job.ID)
+		logger.Debug("Worker %d received unknown job type %s for job %s", w.ID, job.Type, job.ID)
 		err = fmt.Errorf("unknown job type: %s", job.Type)
 	}
 
 	// Handle job completion
 	duration := time.Since(startTime)
-	logger.Debug("DEBUG: Worker %d job %s completed in %v with error: %v", w.ID, job.ID, duration, err)
+	logger.Debug("Worker %d job %s completed in %v with error: %v", w.ID, job.ID, duration, err)
 
 	w.taskMgr.updateStats(duration, err == nil)
 
 	if err != nil {
 		logger.Error("Worker %d failed to process job %s: %v", w.ID, job.ID, err)
-		logger.Debug("DEBUG: Worker %d job %s failed with error: %v", w.ID, job.ID, err)
+		logger.Debug("Worker %d job %s failed with error: %v", w.ID, job.ID, err)
 
 		// Handle retries
 		if job.RetryCount < job.MaxRetries {
 			job.RetryCount++
 			logger.Info("Retrying job %s (attempt %d/%d)", job.ID, job.RetryCount, job.MaxRetries)
-			logger.Debug("DEBUG: Worker %d scheduling retry %d/%d for job %s", w.ID, job.RetryCount, job.MaxRetries, job.ID)
+			logger.Debug("Worker %d scheduling retry %d/%d for job %s", w.ID, job.RetryCount, job.MaxRetries, job.ID)
 
 			// Schedule retry with exponential backoff
 			retryDelay := job.RetryDelay * time.Duration(job.RetryCount)
-			logger.Debug("DEBUG: Worker %d scheduling job %s retry in %v", w.ID, job.ID, retryDelay)
+			logger.Debug("Worker %d scheduling job %s retry in %v", w.ID, job.ID, retryDelay)
 			time.AfterFunc(retryDelay, func() {
-				logger.Debug("DEBUG: Worker %d retry timer fired for job %s, pushing back to queue", w.ID, job.ID)
+				logger.Debug("Worker %d retry timer fired for job %s, pushing back to queue", w.ID, job.ID)
 				w.taskMgr.priorityQueue.Push(job)
 			})
 		} else {
-			logger.Debug("DEBUG: Worker %d job %s failed after %d retries, marking task as failed", w.ID, job.ID, job.MaxRetries)
+			logger.Debug("Worker %d job %s failed after %d retries, marking task as failed", w.ID, job.ID, job.MaxRetries)
 			if taskErr := w.taskMgr.FailTask(job.TaskID, fmt.Sprintf("Job failed after %d retries: %v", job.MaxRetries, err)); taskErr != nil {
 				logger.Error("Failed to mark task %s as failed: %v", job.TaskID, taskErr)
 			}
 		}
 	} else {
 		logger.Info("Worker %d completed job %s successfully in %v", w.ID, job.ID, duration)
-		logger.Debug("DEBUG: Worker %d job %s completed successfully in %v", w.ID, job.ID, duration)
+		logger.Debug("Worker %d job %s completed successfully in %v", w.ID, job.ID, duration)
 		if taskErr := w.taskMgr.CompleteTask(job.TaskID, "Job completed successfully"); taskErr != nil {
 			logger.Error("Failed to mark task %s as completed: %v", job.TaskID, taskErr)
 		}
@@ -289,11 +289,11 @@ func (w *Worker) processJob(job *Job) {
 
 // processVirtualMediaInsert processes a virtual media insertion job
 func (w *Worker) processVirtualMediaInsert(job *Job) error {
-	logger.Debug("DEBUG: Worker %d starting virtual media insert job %s (task %s)", w.ID, job.ID, job.TaskID)
+	logger.Debug("Worker %d starting virtual media insert job %s (task %s)", w.ID, job.ID, job.TaskID)
 
 	payload, ok := job.Payload.(map[string]string)
 	if !ok {
-		logger.Debug("DEBUG: Worker %d received invalid payload type for job %s", w.ID, job.ID)
+		logger.Debug("Worker %d received invalid payload type for job %s", w.ID, job.ID)
 		return fmt.Errorf("invalid payload for virtual media insert job")
 	}
 
@@ -302,17 +302,17 @@ func (w *Worker) processVirtualMediaInsert(job *Job) error {
 	mediaID := payload["mediaID"]
 	imageURL := payload["imageURL"]
 
-	logger.Debug("DEBUG: Worker %d processing virtual media insert - namespace=%s, vmName=%s, mediaID=%s, imageURL=%s",
+	logger.Debug("Worker %d processing virtual media insert - namespace=%s, vmName=%s, mediaID=%s, imageURL=%s",
 		w.ID, namespace, vmName, mediaID, imageURL)
 
 	// Update progress
-	logger.Debug("DEBUG: Worker %d updating task progress to 'Starting virtual media insertion'", w.ID)
+	logger.Debug("Worker %d updating task progress to 'Starting virtual media insertion'", w.ID)
 	if err := w.taskMgr.UpdateTaskProgress(job.TaskID, "Starting virtual media insertion"); err != nil {
 		logger.Error("Failed to update task progress for job %s: %v", job.ID, err)
 	}
 
 	// Perform the actual insertion using KubeVirt client
-	logger.Debug("DEBUG: Worker %d calling kubevirtClient.InsertVirtualMedia", w.ID)
+	logger.Debug("Worker %d calling kubevirtClient.InsertVirtualMedia", w.ID)
 	err := w.taskMgr.kubevirtClient.InsertVirtualMedia(namespace, vmName, mediaID, imageURL)
 	if err != nil {
 		logger.Error("Failed to insert virtual media for VM %s/%s: %v", namespace, vmName, err)
@@ -320,7 +320,7 @@ func (w *Worker) processVirtualMediaInsert(job *Job) error {
 		return fmt.Errorf("failed to insert virtual media: %w", err)
 	}
 
-	logger.Debug("DEBUG: Worker %d virtual media insertion completed successfully", w.ID)
+	logger.Debug("Worker %d virtual media insertion completed successfully", w.ID)
 	if err := w.taskMgr.UpdateTaskProgress(job.TaskID, "Virtual media insertion completed successfully"); err != nil {
 		logger.Error("Failed to update task progress for job %s: %v", job.ID, err)
 	}
@@ -455,14 +455,14 @@ func (tm *TaskManager) startWorkers() {
 
 // jobDispatcher dispatches jobs from the priority queue to available workers
 func (tm *TaskManager) jobDispatcher() {
-	logger.Debug("DEBUG: Starting job dispatcher")
+	logger.Debug("Starting job dispatcher")
 	for {
 		select {
 		case <-tm.ctx.Done():
-			logger.Debug("DEBUG: Job dispatcher context cancelled, stopping")
+			logger.Debug("Job dispatcher context cancelled, stopping")
 			return
 		case <-tm.stopChan:
-			logger.Debug("DEBUG: Job dispatcher stop signal received, stopping")
+			logger.Debug("Job dispatcher stop signal received, stopping")
 			return
 		default:
 			// Get next job from priority queue
@@ -472,25 +472,25 @@ func (tm *TaskManager) jobDispatcher() {
 				continue
 			}
 
-			logger.Debug("DEBUG: Job dispatcher popped job %s (task %s) from queue", job.ID, job.TaskID)
+			logger.Debug("Job dispatcher popped job %s (task %s) from queue", job.ID, job.TaskID)
 
 			// Find available worker
 			worker := tm.getAvailableWorker()
 			if worker != nil {
-				logger.Debug("DEBUG: Job dispatcher found available worker %d for job %s", worker.ID, job.ID)
+				logger.Debug("Job dispatcher found available worker %d for job %s", worker.ID, job.ID)
 				select {
 				case worker.jobChan <- job:
-					logger.Debug("DEBUG: Job dispatcher successfully assigned job %s to worker %d", job.ID, worker.ID)
+					logger.Debug("Job dispatcher successfully assigned job %s to worker %d", job.ID, worker.ID)
 					tm.updateQueueStats(-1)
 				default:
 					// Worker is busy, put job back in queue
-					logger.Debug("DEBUG: Job dispatcher worker %d is busy, putting job %s back in queue", worker.ID, job.ID)
+					logger.Debug("Job dispatcher worker %d is busy, putting job %s back in queue", worker.ID, job.ID)
 					tm.priorityQueue.Push(job)
 					time.Sleep(50 * time.Millisecond)
 				}
 			} else {
 				// No available workers, put job back in queue
-				logger.Debug("DEBUG: Job dispatcher no available workers, putting job %s back in queue", job.ID)
+				logger.Debug("Job dispatcher no available workers, putting job %s back in queue", job.ID)
 				tm.priorityQueue.Push(job)
 				time.Sleep(100 * time.Millisecond)
 			}
@@ -514,7 +514,7 @@ func (tm *TaskManager) getAvailableWorker() *Worker {
 
 // CreateTask creates a new task and queues it for processing
 func (tm *TaskManager) CreateTask(name, namespace, vmName, mediaID, imageURL string) string {
-	logger.Debug("DEBUG: Creating task for virtual media insertion - name=%s, namespace=%s, vmName=%s, mediaID=%s, imageURL=%s",
+	logger.Debug("Creating task for virtual media insertion - name=%s, namespace=%s, vmName=%s, mediaID=%s, imageURL=%s",
 		name, namespace, vmName, mediaID, imageURL)
 
 	tm.taskMutex.Lock()
@@ -523,7 +523,7 @@ func (tm *TaskManager) CreateTask(name, namespace, vmName, mediaID, imageURL str
 	taskID := fmt.Sprintf("task-%d", time.Now().UnixNano())
 	dataVolumeName := fmt.Sprintf("%s-bootiso", vmName)
 
-	logger.Debug("DEBUG: Generated taskID=%s, dataVolumeName=%s", taskID, dataVolumeName)
+	logger.Debug("Generated taskID=%s, dataVolumeName=%s", taskID, dataVolumeName)
 
 	task := &TaskInfo{
 		ID:             taskID,
@@ -544,7 +544,7 @@ func (tm *TaskManager) CreateTask(name, namespace, vmName, mediaID, imageURL str
 	}
 
 	tm.tasks[taskID] = task
-	logger.Debug("DEBUG: Stored task %s in task map", taskID)
+	logger.Debug("Stored task %s in task map", taskID)
 
 	// Create and queue job
 	job := &Job{
@@ -563,18 +563,18 @@ func (tm *TaskManager) CreateTask(name, namespace, vmName, mediaID, imageURL str
 		},
 	}
 
-	logger.Debug("DEBUG: Created job %s for task %s", job.ID, taskID)
+	logger.Debug("Created job %s for task %s", job.ID, taskID)
 
 	tm.priorityQueue.Push(job)
-	logger.Debug("DEBUG: Pushed job %s to priority queue", job.ID)
+	logger.Debug("Pushed job %s to priority queue", job.ID)
 
 	tm.updateStats(0, true) // Task created
 	tm.updateQueueStats(1)
 
-	logger.Debug("DEBUG: Updated stats and queue stats for job %s", job.ID)
+	logger.Debug("Updated stats and queue stats for job %s", job.ID)
 
 	logger.Info("Created task %s and queued job %s for virtual media insertion", taskID, job.ID)
-	logger.Debug("DEBUG: Task creation complete - taskID=%s, jobID=%s", taskID, job.ID)
+	logger.Debug("Task creation complete - taskID=%s, jobID=%s", taskID, job.ID)
 
 	return taskID
 }
