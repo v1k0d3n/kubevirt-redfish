@@ -3276,6 +3276,14 @@ func (c *Client) processImportPodEvents(ctx context.Context, namespace string, w
 
 // handleImportPodCompleted processes a completed/failed import pod
 func (c *Client) handleImportPodCompleted(pod *corev1.Pod) {
+	// Re-fetch the pod from the API server to get fresh data
+	freshPod, err := c.kubernetesClient.CoreV1().Pods(pod.Namespace).Get(context.Background(), pod.Name, metav1.GetOptions{})
+	if err != nil {
+		// Pod disappeared, nothing to do
+		return
+	}
+	pod = freshPod
+
 	podLabels := pod.GetLabels()
 	vmName := podLabels[ImportPodVMLabel]
 	deviceName := podLabels[ImportPodVolumeLabel]
@@ -3303,7 +3311,7 @@ func (c *Client) handleImportPodCompleted(pod *corev1.Pod) {
 	}
 
 	// Delete the completed pod
-	err := c.kubernetesClient.CoreV1().Pods(pod.Namespace).Delete(context.Background(), pod.Name, metav1.DeleteOptions{})
+	err = c.kubernetesClient.CoreV1().Pods(pod.Namespace).Delete(context.Background(), pod.Name, metav1.DeleteOptions{})
 	if err != nil {
 		logger.Warning("Failed to delete completed import pod %s: %v", pod.Name, err)
 	} else {
