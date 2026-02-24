@@ -10,6 +10,7 @@ server:
     enabled: false                                  # Disabled for development/testing (not required with OpenShift because of default route TLS)
     cert_file: "/etc/kubevirt-redfish/tls/tls.crt"  # Path to the certificate file (not required with OpenShift, but may be leveraged for other platforms)
     key_file: "/etc/kubevirt-redfish/tls/tls.key"   # Path to the key file (not required with OpenShift, but may be leveraged for other platforms)
+  # worker_count: omit for CPU-adaptive default (min(10, NumCPU())); if set, capped to NumCPU() for CI/small machines
 
 chassis:
   - name: "chassis-0"                               # Name you want the Redfish chassis to be called for a given namespace

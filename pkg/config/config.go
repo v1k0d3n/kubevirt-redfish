@@ -55,6 +55,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -81,10 +82,11 @@ type Config struct {
 // ServerConfig holds HTTP server configuration including host, port, and TLS settings.
 // The server configuration determines how the Redfish API server listens for requests.
 type ServerConfig struct {
-	Host     string    `mapstructure:"host"`
-	Port     int       `mapstructure:"port"`
-	TLS      TLSConfig `mapstructure:"tls"`
-	TestMode bool      `mapstructure:"test_mode"` // Disables background processes for testing
+	Host        string    `mapstructure:"host"`
+	Port        int       `mapstructure:"port"`
+	TLS         TLSConfig `mapstructure:"tls"`
+	TestMode    bool      `mapstructure:"test_mode"`    // Disables background processes for testing
+	WorkerCount int       `mapstructure:"worker_count"` // Number of background workers for parallel task processing
 }
 
 // TLSConfig holds TLS configuration for secure HTTPS connections.
@@ -173,6 +175,8 @@ type DataVolumeConfig struct {
 func LoadConfig(configPath string) (*Config, error) {
 	logger.Info("Loading configuration...")
 
+	// Reset viper to ensure clean state (important for tests and reloads)
+	viper.Reset()
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
 
@@ -231,6 +235,12 @@ func setDefaults() {
 	viper.SetDefault("server.host", "0.0.0.0")
 	viper.SetDefault("server.port", 8443)
 	viper.SetDefault("server.tls.enabled", true)
+	defaultWorkers := 10 // Default to 10 workers for parallel ISO downloads
+	// If the number of CPUs is less than the default, use the number of CPUs
+	if cpuCount := runtime.NumCPU(); cpuCount < defaultWorkers {
+		defaultWorkers = cpuCount
+	}
+	viper.SetDefault("server.worker_count", defaultWorkers) // Default capped by CPU count
 	viper.SetDefault("kubevirt.api_version", "v1")
 	viper.SetDefault("kubevirt.timeout", 30)
 	viper.SetDefault("kubevirt.allow_insecure_tls", false)
@@ -303,6 +313,17 @@ func validateServerConfig(server *ServerConfig) error {
 
 	if server.Port < 1 || server.Port > 65535 {
 		return errors.NewValidationError("Invalid server port", fmt.Sprintf("server.port must be between 1 and 65535, got %d", server.Port))
+	}
+
+	// Use number of CPUs as the maximum number of workers to avoid overwhelming the system.
+	// Cap to maxWorkers instead of failing so configs with e.g. worker_count: 10 remain portable on CI/small machines.
+	maxWorkers := runtime.NumCPU()
+	if server.WorkerCount < 1 {
+		return errors.NewValidationError("Invalid worker count", fmt.Sprintf("server.worker_count must be at least 1, got %d", server.WorkerCount))
+	}
+	if server.WorkerCount > maxWorkers {
+		logger.Warning("server.worker_count %d exceeds NumCPU()=%d; capping to %d for portability", server.WorkerCount, maxWorkers, maxWorkers)
+		server.WorkerCount = maxWorkers
 	}
 
 	if server.TLS.Enabled {

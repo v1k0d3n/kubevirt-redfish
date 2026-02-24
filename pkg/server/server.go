@@ -129,7 +129,11 @@ func NewServer(config *config.Config, kubevirtClient *kubevirt.Client) *Server {
 	// Initialize background components only if not in test mode
 	if !config.Server.TestMode {
 		// Initialize enhanced task manager
-		taskManager = NewTaskManager(4, kubevirtClient) // 4 workers for background processing
+		workerCount := config.Server.WorkerCount
+		if workerCount <= 0 {
+			workerCount = 10 // Default to 10 workers if not configured
+		}
+		taskManager = NewTaskManager(workerCount, kubevirtClient)
 
 		// Initialize job scheduler
 		jobScheduler = NewJobScheduler()
@@ -1908,7 +1912,65 @@ func (s *Server) handlePowerAction(w http.ResponseWriter, r *http.Request, syste
 		return
 	}
 
-	// Execute the power action
+	// For power-on operations, check if virtual media (ISO) is ready
+	// If not ready, create an async task that will wait for ISO and then execute the reset
+	if powerState == "On" || powerState == "ForceRestart" || powerState == "GracefulRestart" {
+		ready, message, err := s.kubevirtClient.IsVirtualMediaReady(namespace, vmName)
+		if err != nil {
+			// On error checking virtual media status, create async task to be safe
+			// This prevents premature boots if the API has transient failures
+			logger.Warning("Failed to check virtual media status for VM %s/%s: %v (creating async task to be safe)", namespace, vmName, err)
+			message = fmt.Sprintf("API error: %v", err)
+			ready = false // Treat as not ready to be safe
+		}
+		if !ready {
+			if s.taskManager == nil {
+				logger.Warning("Task manager not available, cannot create async reset task for VM %s/%s", namespace, vmName)
+				s.sendInternalError(w, "Task manager not available for async power reset")
+				return
+			}
+			// ISO is not ready - create an async task to wait and then execute reset
+			logger.Info("Virtual media not ready for VM %s/%s, creating async task: %s", namespace, vmName, message)
+
+			// Get the ISO download timeout from config
+			_, _, _, _, isoDownloadTimeout, _ := s.config.GetDataVolumeConfig()
+
+			// Generate the correct System ID for the response
+			responseSystemID := config.GenerateSystemID(s.config.SystemIDConvention, namespace, vmName)
+
+			// Create async task for power reset
+			taskName := fmt.Sprintf("Power Reset %s for VM %s (waiting for ISO)", powerState, vmName)
+			taskID := s.taskManager.CreatePowerResetTask(taskName, namespace, vmName, powerState, isoDownloadTimeout)
+
+			// Get the task to return in the response
+			task, exists := s.taskManager.GetTask(taskID)
+			if !exists {
+				logger.Error("Task %s not found after creation", taskID)
+				s.sendInternalError(w, "Failed to create task")
+				return
+			}
+
+			// Convert task to Redfish format
+			redfishTask := task.ToRedfishTask()
+
+			// Return 202 Accepted with the task resource
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Location", fmt.Sprintf("/redfish/v1/TaskService/Tasks/%s", taskID))
+			w.WriteHeader(http.StatusAccepted)
+			s.setCacheHeaders(w, "action")
+			s.encodeJSONResponse(w, redfishTask)
+
+			logger.Info("Created async power reset task %s for VM %s/%s (ISO still downloading)", taskID, namespace, vmName)
+
+			// Invalidate related cache entries
+			s.responseCache.Invalidate(fmt.Sprintf("Systems/%s", responseSystemID))
+			s.responseCache.Invalidate("Systems")
+
+			return
+		}
+	}
+
+	// Execute the power action (ISO is ready or not applicable)
 	err := s.kubevirtClient.SetVMPowerState(namespace, vmName, powerState)
 	if err != nil {
 		logger.Error("Failed to set power state for VM %s: %v", vmName, err)

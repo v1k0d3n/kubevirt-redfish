@@ -20,8 +20,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/v1k0d3n/kubevirt-redfish/pkg/errors"
@@ -32,13 +34,17 @@ func TestLoadConfig(t *testing.T) {
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "test-config.yaml")
 
-	configContent := `
+	// Use runtime.NumCPU() to ensure worker_count is valid on any machine
+	numCPU := runtime.NumCPU()
+
+	configContent := fmt.Sprintf(`
 server:
   host: "127.0.0.1"
   port: 8443
   tls:
     enabled: false
-
+  worker_count: %d
+  
 chassis:
   - name: "test-cluster"
     namespace: "test-namespace"
@@ -54,7 +60,7 @@ authentication:
 kubevirt:
   api_version: "v1"
   timeout: 30
-`
+`, numCPU)
 
 	err := os.WriteFile(configPath, []byte(configContent), 0600)
 	if err != nil {
@@ -92,6 +98,11 @@ kubevirt:
 	}
 	if config.Auth.Users[0].Username != "testuser" {
 		t.Errorf("Expected username testuser, got %s", config.Auth.Users[0].Username)
+	}
+
+	// Verify worker count
+	if config.Server.WorkerCount != numCPU {
+		t.Errorf("Expected worker count %d, got %d", numCPU, config.Server.WorkerCount)
 	}
 
 	// Verify KubeVirt config
@@ -216,6 +227,7 @@ func TestValidateConfig(t *testing.T) {
 						CertFile: "",
 						KeyFile:  "",
 					},
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -252,11 +264,54 @@ func TestValidateConfig(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "invalid worker count",
+			config: &Config{
+				Server: ServerConfig{
+					Host: "0.0.0.0",
+					Port: 8443,
+					TLS: TLSConfig{
+						Enabled:  false,
+						CertFile: "",
+						KeyFile:  "",
+					},
+					// invalid worker count (0 or > runtime.NumCPU())
+					WorkerCount: 0,
+				},
+				Chassis: []ChassisConfig{
+					{
+						Name:           "test-chassis",
+						Namespace:      "test-namespace",
+						ServiceAccount: "test-sa",
+					},
+				},
+				Auth: AuthConfig{
+					Users: []UserConfig{
+						{
+							Username: "admin",
+							Password: "admin123",
+							Chassis:  []string{"test-chassis"},
+						},
+					},
+				},
+				KubeVirt: KubeVirtConfig{
+					APIVersion: "v1",
+					Timeout:    30,
+				},
+				DataVolume: DataVolumeConfig{
+					StorageSize: "10Gi",
+				},
+				SystemIDConvention: "legacy",
+			},
+			wantErr: true,
+			errType: errors.ErrorTypeValidation,
+		},
+		{
 			name: "missing server host",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "",
-					Port: 8443,
+					Host:        "",
+					Port:        8443,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -290,8 +345,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "invalid server port",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 70000, // Invalid port
+					Host:        "0.0.0.0",
+					Port:        70000, // Invalid port
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -325,8 +381,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "TLS enabled without certificate files",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: runtime.NumCPU(),
 					TLS: TLSConfig{
 						Enabled:  true,
 						CertFile: "",
@@ -365,8 +422,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "no chassis configuration",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{},
 				Auth: AuthConfig{
@@ -394,8 +452,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "invalid chassis name format",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -429,8 +488,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "invalid namespace format",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -463,8 +523,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "no users configuration",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -491,8 +552,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "user with weak password",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -525,8 +587,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "user with access to non-existent chassis",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -559,8 +622,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "duplicate chassis names",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -598,8 +662,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "duplicate usernames",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -637,8 +702,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "invalid KubeVirt API version",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -671,8 +737,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "invalid KubeVirt timeout",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -705,8 +772,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "invalid storage size format",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -739,8 +807,9 @@ func TestValidateConfig(t *testing.T) {
 			name: "invalid timeout format",
 			config: &Config{
 				Server: ServerConfig{
-					Host: "0.0.0.0",
-					Port: 8443,
+					Host:        "0.0.0.0",
+					Port:        8443,
+					WorkerCount: runtime.NumCPU(),
 				},
 				Chassis: []ChassisConfig{
 					{
@@ -808,8 +877,9 @@ func TestEnvironmentVariableOverrides(t *testing.T) {
 	// Create a minimal valid config
 	config := &Config{
 		Server: ServerConfig{
-			Host: "0.0.0.0", // This should be overridden
-			Port: 8443,      // This should be overridden
+			Host:        "0.0.0.0",        // This should be overridden
+			Port:        8443,             // This should be overridden
+			WorkerCount: runtime.NumCPU(), // Valid worker count
 		},
 		Chassis: []ChassisConfig{
 			{
