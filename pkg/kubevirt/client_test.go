@@ -22,6 +22,7 @@ package kubevirt
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -2762,5 +2763,329 @@ func TestHandleVMUpdate(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// newTestVM creates a VM with known labels, annotations, and spec for patching tests.
+// Tests can verify that only the expected labels changed and everything else is preserved.
+func newTestVM(namespace, name string, extraLabels, extraAnnotations map[string]string) *kubevirtv1.VirtualMachine {
+	labels := map[string]string{"existing-label": "original-value"}
+	for k, v := range extraLabels {
+		labels[k] = v
+	}
+	annotations := map[string]string{"existing-annotation": "original-value"}
+	for k, v := range extraAnnotations {
+		annotations[k] = v
+	}
+	bootOrder := uint(1)
+	return &kubevirtv1.VirtualMachine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        name,
+			Namespace:   namespace,
+			Labels:      labels,
+			Annotations: annotations,
+		},
+		Spec: kubevirtv1.VirtualMachineSpec{
+			Template: &kubevirtv1.VirtualMachineInstanceTemplateSpec{
+				Spec: kubevirtv1.VirtualMachineInstanceSpec{
+					Domain: kubevirtv1.DomainSpec{
+						Devices: kubevirtv1.Devices{
+							Disks: []kubevirtv1.Disk{
+								{Name: "disk0", BootOrder: &bootOrder},
+							},
+						},
+					},
+					Volumes: []kubevirtv1.Volume{
+						{Name: "disk0", VolumeSource: kubevirtv1.VolumeSource{DataVolume: &kubevirtv1.DataVolumeSource{Name: "dv0"}}},
+					},
+				},
+			},
+		},
+	}
+}
+
+// assertVMUnchangedExceptLabels compares two VMs and verifies that everything
+// except .metadata.labels is identical.
+func assertVMUnchangedExceptLabels(t *testing.T, before, after *kubevirtv1.VirtualMachine) {
+	t.Helper()
+
+	// Compare annotations
+	if !reflect.DeepEqual(before.GetAnnotations(), after.GetAnnotations()) {
+		t.Errorf("Annotations were modified:\n  before: %v\n  after:  %v", before.GetAnnotations(), after.GetAnnotations())
+	}
+
+	// Compare spec
+	if !reflect.DeepEqual(before.Spec, after.Spec) {
+		t.Errorf("Spec was modified:\n  before: %+v\n  after:  %+v", before.Spec, after.Spec)
+	}
+
+	// Compare status
+	if !reflect.DeepEqual(before.Status, after.Status) {
+		t.Errorf("Status was modified:\n  before: %+v\n  after:  %+v", before.Status, after.Status)
+	}
+
+	// Compare name and namespace
+	if before.Name != after.Name {
+		t.Errorf("Name was modified: %q -> %q", before.Name, after.Name)
+	}
+	if before.Namespace != after.Namespace {
+		t.Errorf("Namespace was modified: %q -> %q", before.Namespace, after.Namespace)
+	}
+}
+
+func TestSetImportingLabel(t *testing.T) {
+	mockDynamicClient := NewMockDynamicClient()
+	fakeK8sClient := fake.NewSimpleClientset()
+	vm := newTestVM("test-ns", "test-vm", nil, nil)
+	mockDynamicClient.AddVM(vm)
+
+	before, _ := mockDynamicClient.GetVM("test-ns", "test-vm")
+
+	client := NewClientWithClients(fakeK8sClient, mockDynamicClient, 30*time.Second, nil)
+
+	err := client.setImportingLabel("test-ns", "test-vm", "cdrom0", "copy-iso-pod-123")
+	if err != nil {
+		t.Fatalf("setImportingLabel failed: %v", err)
+	}
+
+	after, err := mockDynamicClient.GetVM("test-ns", "test-vm")
+	if err != nil {
+		t.Fatalf("Failed to get VM: %v", err)
+	}
+
+	labels := after.GetLabels()
+	expectedKey := ImportingLabelPrefix + "cdrom0"
+	if labels[expectedKey] != "copy-iso-pod-123" {
+		t.Errorf("Expected label %s=%q, got %q", expectedKey, "copy-iso-pod-123", labels[expectedKey])
+	}
+	if labels["existing-label"] != "original-value" {
+		t.Errorf("Existing label was modified: got %q", labels["existing-label"])
+	}
+	assertVMUnchangedExceptLabels(t, before, after)
+}
+
+func TestSetImportingLabel_PreservesExistingImportLabels(t *testing.T) {
+	mockDynamicClient := NewMockDynamicClient()
+	fakeK8sClient := fake.NewSimpleClientset()
+	vm := newTestVM("test-ns", "test-vm", map[string]string{
+		ImportingLabelPrefix + "cdrom1": "other-pod",
+	}, nil)
+	mockDynamicClient.AddVM(vm)
+
+	client := NewClientWithClients(fakeK8sClient, mockDynamicClient, 30*time.Second, nil)
+
+	err := client.setImportingLabel("test-ns", "test-vm", "cdrom0", "copy-iso-pod-456")
+	if err != nil {
+		t.Fatalf("setImportingLabel failed: %v", err)
+	}
+
+	updated, err := mockDynamicClient.GetVM("test-ns", "test-vm")
+	if err != nil {
+		t.Fatalf("Failed to get VM: %v", err)
+	}
+
+	labels := updated.GetLabels()
+	if labels[ImportingLabelPrefix+"cdrom0"] != "copy-iso-pod-456" {
+		t.Errorf("New importing label not set correctly")
+	}
+	if labels[ImportingLabelPrefix+"cdrom1"] != "other-pod" {
+		t.Errorf("Existing importing label was modified: got %q", labels[ImportingLabelPrefix+"cdrom1"])
+	}
+}
+
+func TestRemoveImportingLabel(t *testing.T) {
+	mockDynamicClient := NewMockDynamicClient()
+	fakeK8sClient := fake.NewSimpleClientset()
+	vm := newTestVM("test-ns", "test-vm", map[string]string{
+		ImportingLabelPrefix + "cdrom0": "copy-iso-pod-123",
+		ImportingLabelPrefix + "cdrom1": "other-pod",
+	}, nil)
+	mockDynamicClient.AddVM(vm)
+
+	before, _ := mockDynamicClient.GetVM("test-ns", "test-vm")
+
+	client := NewClientWithClients(fakeK8sClient, mockDynamicClient, 30*time.Second, nil)
+
+	err := client.removeImportingLabel("test-ns", "test-vm", "cdrom0")
+	if err != nil {
+		t.Fatalf("removeImportingLabel failed: %v", err)
+	}
+
+	after, err := mockDynamicClient.GetVM("test-ns", "test-vm")
+	if err != nil {
+		t.Fatalf("Failed to get VM: %v", err)
+	}
+
+	labels := after.GetLabels()
+	if _, exists := labels[ImportingLabelPrefix+"cdrom0"]; exists {
+		t.Errorf("Importing label cdrom0 should have been removed")
+	}
+	if labels[ImportingLabelPrefix+"cdrom1"] != "other-pod" {
+		t.Errorf("Other importing label was modified: got %q", labels[ImportingLabelPrefix+"cdrom1"])
+	}
+	if labels["existing-label"] != "original-value" {
+		t.Errorf("Existing label was modified: got %q", labels["existing-label"])
+	}
+	assertVMUnchangedExceptLabels(t, before, after)
+}
+
+func TestIsImportInProgress(t *testing.T) {
+	testCases := []struct {
+		name     string
+		labels   map[string]string
+		expected bool
+	}{
+		{
+			name:     "no importing labels",
+			labels:   nil,
+			expected: false,
+		},
+		{
+			name:     "one importing label",
+			labels:   map[string]string{ImportingLabelPrefix + "cdrom0": "pod-1"},
+			expected: true,
+		},
+		{
+			name: "multiple importing labels",
+			labels: map[string]string{
+				ImportingLabelPrefix + "cdrom0": "pod-1",
+				ImportingLabelPrefix + "cdrom1": "pod-2",
+			},
+			expected: true,
+		},
+		{
+			name:     "unrelated labels only",
+			labels:   map[string]string{"some-other-label": "value"},
+			expected: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockDynamicClient := NewMockDynamicClient()
+			fakeK8sClient := fake.NewSimpleClientset()
+			vm := newTestVM("test-ns", "test-vm", tc.labels, nil)
+			mockDynamicClient.AddVM(vm)
+
+			client := NewClientWithClients(fakeK8sClient, mockDynamicClient, 30*time.Second, nil)
+
+			result, err := client.IsImportInProgress("test-ns", "test-vm")
+			if err != nil {
+				t.Fatalf("IsImportInProgress failed: %v", err)
+			}
+			if result != tc.expected {
+				t.Errorf("IsImportInProgress = %v, want %v", result, tc.expected)
+			}
+		})
+	}
+}
+
+func TestIsImportInProgress_VMNotFound(t *testing.T) {
+	mockDynamicClient := NewMockDynamicClient()
+	fakeK8sClient := fake.NewSimpleClientset()
+	client := NewClientWithClients(fakeK8sClient, mockDynamicClient, 30*time.Second, nil)
+
+	_, err := client.IsImportInProgress("test-ns", "nonexistent-vm")
+	if err == nil {
+		t.Error("Expected error for nonexistent VM")
+	}
+}
+
+func TestSetPowerAfterImportLabel(t *testing.T) {
+	mockDynamicClient := NewMockDynamicClient()
+	fakeK8sClient := fake.NewSimpleClientset()
+	vm := newTestVM("test-ns", "test-vm", nil, nil)
+	mockDynamicClient.AddVM(vm)
+
+	before, _ := mockDynamicClient.GetVM("test-ns", "test-vm")
+
+	client := NewClientWithClients(fakeK8sClient, mockDynamicClient, 30*time.Second, nil)
+
+	err := client.SetPowerAfterImportLabel("test-ns", "test-vm", "On")
+	if err != nil {
+		t.Fatalf("SetPowerAfterImportLabel failed: %v", err)
+	}
+
+	after, err := mockDynamicClient.GetVM("test-ns", "test-vm")
+	if err != nil {
+		t.Fatalf("Failed to get VM: %v", err)
+	}
+
+	labels := after.GetLabels()
+	if labels[PowerAfterImportLabel] != "On" {
+		t.Errorf("Expected label %s=%q, got %q", PowerAfterImportLabel, "On", labels[PowerAfterImportLabel])
+	}
+	if labels["existing-label"] != "original-value" {
+		t.Errorf("Existing label was modified: got %q", labels["existing-label"])
+	}
+	assertVMUnchangedExceptLabels(t, before, after)
+}
+
+func TestSetPowerAfterImportLabel_OverwritesPrevious(t *testing.T) {
+	mockDynamicClient := NewMockDynamicClient()
+	fakeK8sClient := fake.NewSimpleClientset()
+	vm := newTestVM("test-ns", "test-vm", map[string]string{
+		PowerAfterImportLabel: "On",
+	}, nil)
+	mockDynamicClient.AddVM(vm)
+
+	client := NewClientWithClients(fakeK8sClient, mockDynamicClient, 30*time.Second, nil)
+
+	err := client.SetPowerAfterImportLabel("test-ns", "test-vm", "ForceRestart")
+	if err != nil {
+		t.Fatalf("SetPowerAfterImportLabel failed: %v", err)
+	}
+
+	updated, err := mockDynamicClient.GetVM("test-ns", "test-vm")
+	if err != nil {
+		t.Fatalf("Failed to get VM: %v", err)
+	}
+
+	labels := updated.GetLabels()
+	if labels[PowerAfterImportLabel] != "ForceRestart" {
+		t.Errorf("Expected power label to be overwritten to ForceRestart, got %q", labels[PowerAfterImportLabel])
+	}
+}
+
+func TestSetPowerAfterImportLabel_PreservesImportingLabels(t *testing.T) {
+	mockDynamicClient := NewMockDynamicClient()
+	fakeK8sClient := fake.NewSimpleClientset()
+	vm := newTestVM("test-ns", "test-vm", map[string]string{
+		ImportingLabelPrefix + "cdrom0": "pod-1",
+	}, nil)
+	mockDynamicClient.AddVM(vm)
+
+	before, _ := mockDynamicClient.GetVM("test-ns", "test-vm")
+
+	client := NewClientWithClients(fakeK8sClient, mockDynamicClient, 30*time.Second, nil)
+
+	err := client.SetPowerAfterImportLabel("test-ns", "test-vm", "On")
+	if err != nil {
+		t.Fatalf("SetPowerAfterImportLabel failed: %v", err)
+	}
+
+	after, err := mockDynamicClient.GetVM("test-ns", "test-vm")
+	if err != nil {
+		t.Fatalf("Failed to get VM: %v", err)
+	}
+
+	labels := after.GetLabels()
+	if labels[PowerAfterImportLabel] != "On" {
+		t.Errorf("Power label not set correctly")
+	}
+	if labels[ImportingLabelPrefix+"cdrom0"] != "pod-1" {
+		t.Errorf("Importing label was modified: got %q", labels[ImportingLabelPrefix+"cdrom0"])
+	}
+	assertVMUnchangedExceptLabels(t, before, after)
+}
+
+func TestSetPowerAfterImportLabel_VMNotFound(t *testing.T) {
+	mockDynamicClient := NewMockDynamicClient()
+	fakeK8sClient := fake.NewSimpleClientset()
+	client := NewClientWithClients(fakeK8sClient, mockDynamicClient, 30*time.Second, nil)
+
+	err := client.SetPowerAfterImportLabel("test-ns", "nonexistent-vm", "On")
+	if err == nil {
+		t.Error("Expected error for nonexistent VM")
 	}
 }

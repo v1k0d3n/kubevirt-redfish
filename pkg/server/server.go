@@ -227,6 +227,7 @@ func (s *Server) Start() error {
 		}
 		if len(namespaces) > 0 {
 			s.kubevirtClient.StartBootOnceWatcher(context.Background(), namespaces)
+			s.kubevirtClient.StartImportPodWatcher(context.Background(), namespaces)
 		}
 	}
 
@@ -1931,6 +1932,46 @@ func (s *Server) handlePowerAction(w http.ResponseWriter, r *http.Request, syste
 		powerState = "Resume"
 	default:
 		s.sendValidationError(w, "Unsupported reset type", fmt.Sprintf("Reset type '%s' is not supported. Supported types: On, ForceOff, GracefulShutdown, ForceRestart, GracefulRestart, Pause, Resume", resetRequest.ResetType))
+		return
+	}
+
+	// Check if an ISO import is in progress for this VM
+	importing, importErr := s.kubevirtClient.IsImportInProgress(namespace, vmName)
+	if importErr != nil {
+		logger.Error("Failed to check import status for VM %s/%s: %v", namespace, vmName, importErr)
+		s.sendInternalError(w, fmt.Sprintf("Failed to check import status: %v", importErr))
+		return
+	}
+
+	if importing {
+		// Defer the power command until import completes
+		if setErr := s.kubevirtClient.SetPowerAfterImportLabel(namespace, vmName, powerState); setErr != nil {
+			logger.Error("Failed to set power-after-import label for VM %s/%s: %v", namespace, vmName, setErr)
+			s.sendInternalError(w, fmt.Sprintf("Failed to defer power action: %v", setErr))
+			return
+		}
+
+		responseSystemID := config.GenerateSystemID(s.config.SystemIDConvention, namespace, vmName)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		s.setCacheHeaders(w, "action")
+		s.encodeJSONResponse(w, map[string]interface{}{
+			"@odata.context": "/redfish/v1/$metadata#ActionResponse.ActionResponse",
+			"@odata.type":    "#ActionResponse.v1_0_0.ActionResponse",
+			"@odata.id":      fmt.Sprintf("/redfish/v1/Systems/%s/Actions/ComputerSystem.Reset", responseSystemID),
+			"Id":             "Reset",
+			"Name":           "Reset Action",
+			"Status": map[string]string{
+				"State":  "Starting",
+				"Health": "OK",
+			},
+			"Messages": []map[string]string{
+				{
+					"Message": fmt.Sprintf("Power action %s deferred until ISO import completes", resetRequest.ResetType),
+				},
+			},
+		})
+		logger.Info("Power action %s deferred for VM %s/%s (import in progress)", powerState, namespace, vmName)
 		return
 	}
 

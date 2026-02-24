@@ -91,6 +91,11 @@ type Client struct {
 	watcherCtx    context.Context
 	watcherCancel context.CancelFunc
 	watcherWg     sync.WaitGroup
+
+	// Import pod watcher management
+	importWatcherCtx    context.Context
+	importWatcherCancel context.CancelFunc
+	importWatcherWg     sync.WaitGroup
 }
 
 // init registers KubeVirt and CDI types with the runtime scheme for conversion
@@ -311,8 +316,8 @@ func (c *Client) GetPerformanceMetrics() map[string]interface{} {
 
 // Close properly cleans up the client resources
 func (c *Client) Close() error {
-	// Stop the boot-once watcher if running
 	c.stopBootOnceWatcher()
+	c.stopImportPodWatcher()
 
 	if c.httpClient != nil && c.httpClient.Transport != nil {
 		if transport, ok := c.httpClient.Transport.(*http.Transport); ok {
@@ -1814,14 +1819,12 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 		logger.Info("Created new PVC %s for virtual media", dataVolumeName)
 		logger.Debug("DEBUG: Successfully created new PVC %s for virtual media", dataVolumeName)
 
-		// Use helper pod to copy ISO to PVC
-		logger.Debug("DEBUG: Calling copyISOToPVC for PVC %s", dataVolumeName)
-		if err := c.copyISOToPVC(namespace, dataVolumeName, imageURL, isoDownloadTimeout); err != nil {
+		// Create helper pod to copy ISO to PVC (non-blocking, pod watcher handles completion)
+		if err := c.copyISOToPVC(namespace, dataVolumeName, imageURL, isoDownloadTimeout, name, deviceName); err != nil {
 			logger.Error("copyISOToPVC failed for PVC %s: %v", dataVolumeName, err)
 			return fmt.Errorf("failed to copy ISO to PVC: %w", err)
 		}
-		logger.Info("Helper pod completed ISO import for PVC %s", dataVolumeName)
-		logger.Debug("DEBUG: Helper pod successfully completed ISO import for PVC %s", dataVolumeName)
+		logger.Info("Helper pod created for ISO import to PVC %s", dataVolumeName)
 	} else {
 		logger.Debug("DEBUG: Using CDI HTTP import approach for URL scheme %s", u.Scheme)
 		// CDI HTTP import for HTTP or valid HTTPS
@@ -1994,57 +1997,48 @@ func (c *Client) uploadISOToDataVolume(namespace, dataVolumeName, filePath strin
 	return nil
 }
 
-// copyISOToPVC copies an ISO file from the kubevirt-redfish pod to a PVC using a simpler approach
-func (c *Client) copyISOToPVC(namespace, dataVolumeName, imageURL, isoDownloadTimeout string) error {
+// copyISOToPVC creates a helper pod that downloads an ISO and writes it to a PVC.
+// The function returns immediately after creating the pod -- the import pod watcher
+// handles completion detection, VM label cleanup, and pod deletion.
+func (c *Client) copyISOToPVC(namespace, dataVolumeName, imageURL, isoDownloadTimeout, vmName, deviceName string) error {
 	logger.Info("Copying ISO from %s to PVC for DataVolume %s", imageURL, dataVolumeName)
-	logger.Debug("DEBUG: Starting copyISOToPVC - namespace=%s, dataVolumeName=%s, imageURL=%s", namespace, dataVolumeName, imageURL)
 
-	// Get DataVolume configuration to determine helper image and timeouts
 	_, _, _, _, configISODownloadTimeout, helperImage := c.getDataVolumeConfig()
 
-	// Use provided timeout if not empty, otherwise use config timeout
 	if isoDownloadTimeout == "" {
 		isoDownloadTimeout = configISODownloadTimeout
 	}
 
 	pvcName := dataVolumeName
 	isoFileName := filepath.Base(imageURL)
-	logger.Debug("DEBUG: Extracted ISO filename=%s from URL", isoFileName)
-	logger.Debug("DEBUG: Using helper image=%s for ISO copy operation", helperImage)
 
-	// Create a simple helper pod that will copy the file to block device
-	// Use timestamp to make pod name unique and avoid race conditions
 	timestamp := time.Now().Unix()
 	helperPodName := fmt.Sprintf("copy-iso-%s-%d", dataVolumeName, timestamp)
-	logger.Debug("DEBUG: Generated unique helper pod name=%s", helperPodName)
 
 	// Check if helper pod already exists before creating
 	existingPod, err := c.kubernetesClient.CoreV1().Pods(namespace).Get(context.Background(), helperPodName, metav1.GetOptions{})
 	if err == nil {
-		logger.Debug("DEBUG: Helper pod %s already exists with status: %s", helperPodName, existingPod.Status.Phase)
 		if existingPod.Status.Phase == corev1.PodSucceeded {
 			logger.Info("Helper pod %s already completed successfully, reusing result", helperPodName)
 			return nil
 		} else if existingPod.Status.Phase == corev1.PodFailed {
-			logger.Debug("DEBUG: Helper pod %s exists but failed, will delete and recreate", helperPodName)
-			// Delete the failed pod
 			err = c.kubernetesClient.CoreV1().Pods(namespace).Delete(context.Background(), helperPodName, metav1.DeleteOptions{})
 			if err != nil {
-				logger.Debug("DEBUG: Failed to delete existing failed pod %s: %v", helperPodName, err)
-			} else {
-				logger.Debug("DEBUG: Successfully deleted existing failed pod %s", helperPodName)
+				logger.Warning("Failed to delete existing failed pod %s: %v", helperPodName, err)
 			}
 		} else {
-			logger.Debug("DEBUG: Helper pod %s exists with status %s, will wait for completion", helperPodName, existingPod.Status.Phase)
+			logger.Info("Helper pod %s already exists with status %s", helperPodName, existingPod.Status.Phase)
 		}
-	} else {
-		logger.Debug("DEBUG: Helper pod %s does not exist, will create new one", helperPodName)
 	}
 
 	helperPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      helperPodName,
 			Namespace: namespace,
+			Labels: map[string]string{
+				ImportPodVMLabel:     vmName,
+				ImportPodVolumeLabel: deviceName,
+			},
 		},
 		Spec: corev1.PodSpec{
 			RestartPolicy: corev1.RestartPolicyNever,
@@ -2074,24 +2068,19 @@ func (c *Client) copyISOToPVC(namespace, dataVolumeName, imageURL, isoDownloadTi
 		},
 	}
 
-	logger.Debug("DEBUG: Creating helper pod %s with PVC %s", helperPodName, pvcName)
-	// Create the helper pod with retry logic for race conditions
 	var createdPod *corev1.Pod
 	err = c.retryWithBackoff(fmt.Sprintf("create helper pod %s", helperPodName), func() error {
 		var createErr error
 		createdPod, createErr = c.kubernetesClient.CoreV1().Pods(namespace).Create(context.Background(), helperPod, metav1.CreateOptions{})
 		if createErr != nil {
-			// Check if this is an "already exists" error (race condition)
 			if strings.Contains(createErr.Error(), "already exists") {
-				logger.Debug("DEBUG: Helper pod %s already exists (race condition), will use existing pod", helperPodName)
-				// Get the existing pod
 				existingPod, getErr := c.kubernetesClient.CoreV1().Pods(namespace).Get(context.Background(), helperPodName, metav1.GetOptions{})
 				if getErr != nil {
 					logger.Error("Failed to get existing helper pod %s: %v", helperPodName, getErr)
 					return fmt.Errorf("failed to get existing helper pod: %w", getErr)
 				}
 				createdPod = existingPod
-				return nil // Success - we'll use the existing pod
+				return nil
 			}
 			logger.Error("Failed to create helper pod %s: %v", helperPodName, createErr)
 			return fmt.Errorf("failed to create helper pod: %w", createErr)
@@ -2104,73 +2093,73 @@ func (c *Client) copyISOToPVC(namespace, dataVolumeName, imageURL, isoDownloadTi
 		return fmt.Errorf("failed to create helper pod after retries: %w", err)
 	}
 
-	logger.Debug("DEBUG: Successfully created/retrieved helper pod %s with UID %s", helperPodName, createdPod.UID)
+	logger.Info("Created helper pod %s (UID %s) for VM %s/%s volume %s", helperPodName, createdPod.UID, namespace, vmName, deviceName)
 
-	defer func() {
-		logger.Debug("DEBUG: Cleaning up helper pod %s", helperPodName)
-		err := c.kubernetesClient.CoreV1().Pods(namespace).Delete(context.Background(), helperPodName, metav1.DeleteOptions{})
-		if err != nil {
-			logger.Debug("DEBUG: Failed to delete helper pod %s during cleanup: %v", helperPodName, err)
-		} else {
-			logger.Debug("DEBUG: Successfully deleted helper pod %s during cleanup", helperPodName)
-		}
-	}()
+	// Set importing label on the VM so watchers and power management can detect the in-progress import
+	if err := c.setImportingLabel(namespace, vmName, deviceName, helperPodName); err != nil {
+		logger.Error("Failed to set importing label on VM %s/%s: %v", namespace, vmName, err)
+		return fmt.Errorf("failed to set importing label: %w", err)
+	}
 
-	// Parse timeout for ISO download
-	isoDownloadDuration, err := time.ParseDuration(isoDownloadTimeout)
+	return nil
+}
+
+// setImportingLabel sets the importing.redfish/<deviceName> label on a VM
+func (c *Client) setImportingLabel(namespace, vmName, deviceName, podName string) error {
+	labelKey := ImportingLabelPrefix + deviceName
+	patchJSON := fmt.Sprintf(`{"metadata":{"labels":{%q:%q}}}`, labelKey, podName)
+
+	gvr := schema.GroupVersionResource{
+		Group:    "kubevirt.io",
+		Version:  "v1",
+		Resource: "virtualmachines",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+	defer cancel()
+
+	_, err := c.dynamicClient.Resource(gvr).Namespace(namespace).Patch(ctx, vmName, types.MergePatchType, []byte(patchJSON), metav1.PatchOptions{})
 	if err != nil {
-		logger.Warning("Invalid iso_download_timeout %s, using default 30m: %v", isoDownloadTimeout, err)
-		isoDownloadDuration = 30 * time.Minute
+		return fmt.Errorf("failed to patch VM %s/%s with importing label: %w", namespace, vmName, err)
 	}
-	logger.Debug("DEBUG: Using timeout duration: %v", isoDownloadDuration)
+	logger.Info("Set importing label %s=%s on VM %s/%s", labelKey, podName, namespace, vmName)
+	return nil
+}
 
-	// Wait for the pod to complete
-	timeoutSeconds := int(isoDownloadDuration.Seconds())
-	logger.Debug("DEBUG: Starting pod monitoring loop for %d seconds", timeoutSeconds)
-
-	for i := 0; i < timeoutSeconds; i++ {
-		if i%10 == 0 { // Log every 10 seconds
-			logger.Debug("DEBUG: Pod monitoring iteration %d/%d", i, timeoutSeconds)
-		}
-
-		pod, err := c.kubernetesClient.CoreV1().Pods(namespace).Get(context.Background(), helperPodName, metav1.GetOptions{})
-		if err != nil {
-			logger.Debug("DEBUG: Failed to get pod %s status (iteration %d): %v", helperPodName, i, err)
-			time.Sleep(1 * time.Second)
-			continue
-		}
-
-		logger.Debug("DEBUG: Pod %s status: Phase=%s, PodIP=%s", helperPodName, pod.Status.Phase, pod.Status.PodIP)
-
-		if pod.Status.Phase == corev1.PodSucceeded {
-			logger.Info("Helper pod %s completed successfully", helperPodName)
-			logger.Debug("DEBUG: Helper pod %s succeeded after %d seconds", helperPodName, i)
-			return nil
-		}
-		if pod.Status.Phase == corev1.PodFailed {
-			logger.Debug("DEBUG: Helper pod %s failed after %d seconds", helperPodName, i)
-			// Try to get pod logs for debugging, but don't fail if we can't
-			logs, logErr := c.kubernetesClient.CoreV1().Pods(namespace).GetLogs(helperPodName, &corev1.PodLogOptions{}).DoRaw(context.Background())
-			if logErr != nil {
-				logger.Error("Helper pod %s failed. Could not get logs: %v", helperPodName, logErr)
-				logger.Debug("DEBUG: Failed to retrieve logs for pod %s: %v", helperPodName, logErr)
-			} else {
-				logger.Error("Helper pod %s failed. Logs: %s", helperPodName, string(logs))
-				logger.Debug("DEBUG: Helper pod %s failed with logs: %s", helperPodName, string(logs))
-			}
-			return fmt.Errorf("helper pod %s failed", helperPodName)
-		}
-
-		// Log container status if available
-		for _, containerStatus := range pod.Status.ContainerStatuses {
-			logger.Debug("DEBUG: Container %s status: Ready=%v, State=%v", containerStatus.Name, containerStatus.Ready, containerStatus.State)
-		}
-
-		time.Sleep(1 * time.Second)
+// IsImportInProgress checks if a VM has any active importing.redfish/* labels
+func (c *Client) IsImportInProgress(namespace, name string) (bool, error) {
+	vm, err := c.GetVM(namespace, name)
+	if err != nil {
+		return false, fmt.Errorf("failed to get VM %s/%s: %w", namespace, name, err)
 	}
 
-	logger.Debug("DEBUG: Helper pod %s did not complete within %d seconds", helperPodName, timeoutSeconds)
-	return fmt.Errorf("helper pod %s did not complete in time", helperPodName)
+	for key := range vm.GetLabels() {
+		if strings.HasPrefix(key, ImportingLabelPrefix) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// SetPowerAfterImportLabel sets the power-after-import.redfish label on a VM
+func (c *Client) SetPowerAfterImportLabel(namespace, name, powerState string) error {
+	patchJSON := fmt.Sprintf(`{"metadata":{"labels":{%q:%q}}}`, PowerAfterImportLabel, powerState)
+
+	gvr := schema.GroupVersionResource{
+		Group:    "kubevirt.io",
+		Version:  "v1",
+		Resource: "virtualmachines",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+	defer cancel()
+
+	_, err := c.dynamicClient.Resource(gvr).Namespace(namespace).Patch(ctx, name, types.MergePatchType, []byte(patchJSON), metav1.PatchOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to set power-after-import label on VM %s/%s: %w", namespace, name, err)
+	}
+	logger.Info("Set power-after-import label %s=%s on VM %s/%s", PowerAfterImportLabel, powerState, namespace, name)
+	return nil
 }
 
 // resourceMustParse is a helper for resource.Quantity
@@ -3077,6 +3066,14 @@ const (
 	BootOnceVMIUIDAnnotation         = "redfish.boot.once.vmi-uid"
 )
 
+// Import tracking labels
+const (
+	ImportingLabelPrefix  = "importing.redfish/"
+	PowerAfterImportLabel = "power-after-import.redfish"
+	ImportPodVMLabel      = "vm.redfish"
+	ImportPodVolumeLabel  = "volume.vm.redfish"
+)
+
 // BootOrderConfig represents the boot order configuration for a disk
 type BootOrderConfig struct {
 	DiskName  string `json:"diskName"`
@@ -3208,24 +3205,19 @@ func (c *Client) runNamespaceWatcher(ctx context.Context, namespace string) {
 		Resource: "virtualmachines",
 	}
 
-	// Label selector for boot-once enabled VMs
-	labelSelector := fmt.Sprintf("%s=enabled", BootOnceLabel)
-
 	backoff := time.Second
 	maxBackoff := time.Minute
 
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Info("Boot-once watcher for namespace %s shutting down", namespace)
+			logger.Info("VM watcher for namespace %s shutting down", namespace)
 			return
 		default:
 		}
 
-		// Create watch with label selector
-		watcher, err := c.dynamicClient.Resource(gvr).Namespace(namespace).Watch(ctx, metav1.ListOptions{
-			LabelSelector: labelSelector,
-		})
+		// Watch all VMs -- filtering is done in the event handler
+		watcher, err := c.dynamicClient.Resource(gvr).Namespace(namespace).Watch(ctx, metav1.ListOptions{})
 		if err != nil {
 			logger.Error("Failed to create watch for namespace %s: %v, retrying in %v", namespace, err, backoff)
 			select {
@@ -3310,11 +3302,15 @@ func (c *Client) handleVMUpdate(vm *kubevirtv1.VirtualMachine) {
 		return
 	}
 
+	vmLabels := currentVM.GetLabels()
+
+	// Handle power-after-import if applicable
+	if vmLabels != nil && vmLabels[PowerAfterImportLabel] != "" {
+		c.handlePowerAfterImport(currentVM)
+	}
+
 	// Check if boot-once label is still present
-	labels := currentVM.GetLabels()
-	if labels == nil || labels[BootOnceLabel] != "enabled" {
-		// Boot-once label not present or already cleared, nothing to do
-		logger.Debug("VM %s/%s does not have boot-once label, skipping", namespace, name)
+	if vmLabels == nil || vmLabels[BootOnceLabel] != "enabled" {
 		return
 	}
 
@@ -3402,9 +3398,55 @@ func (c *Client) handleVMUpdate(vm *kubevirtv1.VirtualMachine) {
 	}
 }
 
-// reconcileExistingBootOnceVMs processes all labeled VMs on startup to clean stale state
+// handlePowerAfterImport checks if a VM's imports are all done and reissues a deferred power command
+func (c *Client) handlePowerAfterImport(vm *kubevirtv1.VirtualMachine) {
+	namespace := vm.GetNamespace()
+	name := vm.GetName()
+	vmLabels := vm.GetLabels()
+
+	powerCommand := vmLabels[PowerAfterImportLabel]
+	if powerCommand == "" {
+		return
+	}
+
+	// Check if any importing labels remain
+	for key := range vmLabels {
+		if strings.HasPrefix(key, ImportingLabelPrefix) {
+			logger.Info("VM %s/%s still has importing label %s, deferring power command %s", namespace, name, key, powerCommand)
+			return
+		}
+	}
+
+	logger.Info("All imports complete for VM %s/%s, executing deferred power command: %s", namespace, name, powerCommand)
+
+	// Remove the power-after-import label first to avoid re-triggering
+	patchJSON := fmt.Sprintf(`{"metadata":{"labels":{%q:null}}}`, PowerAfterImportLabel)
+	gvr := schema.GroupVersionResource{
+		Group:    "kubevirt.io",
+		Version:  "v1",
+		Resource: "virtualmachines",
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+	defer cancel()
+
+	_, err := c.dynamicClient.Resource(gvr).Namespace(namespace).Patch(ctx, name, types.MergePatchType, []byte(patchJSON), metav1.PatchOptions{})
+	if err != nil {
+		logger.Error("Failed to remove power-after-import label from VM %s/%s: %v", namespace, name, err)
+		return
+	}
+
+	if err := c.SetVMPowerState(namespace, name, powerCommand); err != nil {
+		logger.Error("Failed to execute deferred power command %s for VM %s/%s: %v", powerCommand, namespace, name, err)
+		return
+	}
+
+	logger.Info("Successfully executed deferred power command %s for VM %s/%s", powerCommand, namespace, name)
+}
+
+// reconcileExistingBootOnceVMs processes all labeled VMs on startup to clean stale state.
+// Also reconciles VMs with power-after-import labels.
 func (c *Client) reconcileExistingBootOnceVMs(namespace string) error {
-	logger.Info("Reconciling existing boot-once VMs in namespace %s", namespace)
+	logger.Info("Reconciling existing labeled VMs in namespace %s", namespace)
 
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
@@ -3415,12 +3457,12 @@ func (c *Client) reconcileExistingBootOnceVMs(namespace string) error {
 		Resource: "virtualmachines",
 	}
 
-	// Label selector for boot-once enabled VMs
-	labelSelector := fmt.Sprintf("%s=enabled", BootOnceLabel)
+	processed := make(map[string]bool)
 
-	// List all VMs with boot-once label
+	// Reconcile boot-once VMs
+	bootOnceSelector := fmt.Sprintf("%s=enabled", BootOnceLabel)
 	vmList, err := c.dynamicClient.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: labelSelector,
+		LabelSelector: bootOnceSelector,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to list boot-once VMs: %w", err)
@@ -3428,16 +3470,239 @@ func (c *Client) reconcileExistingBootOnceVMs(namespace string) error {
 
 	logger.Info("Found %d VMs with boot-once label in namespace %s", len(vmList.Items), namespace)
 
-	// Process each VM
 	for _, item := range vmList.Items {
 		vm, err := unstructuredToVM(&item)
 		if err != nil {
 			logger.Error("Failed to convert VM from list: %v", err)
 			continue
 		}
-
-		// Handle the VM as if it was an update event
+		processed[string(vm.GetUID())] = true
 		c.handleVMUpdate(vm)
+	}
+
+	// Reconcile power-after-import VMs
+	powerPendingList, err := c.dynamicClient.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: PowerAfterImportLabel,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to list power-after-import VMs: %w", err)
+	}
+
+	logger.Info("Found %d VMs with power-after-import label in namespace %s", len(powerPendingList.Items), namespace)
+
+	for _, item := range powerPendingList.Items {
+		if processed[string(item.GetUID())] {
+			continue
+		}
+		vm, err := unstructuredToVM(&item)
+		if err != nil {
+			logger.Error("Failed to convert VM from list: %v", err)
+			continue
+		}
+		c.handleVMUpdate(vm)
+	}
+
+	return nil
+}
+
+// =============================================================================
+// IMPORT POD WATCHER
+// =============================================================================
+
+// StartImportPodWatcher starts watching for import helper pods across configured namespaces
+func (c *Client) StartImportPodWatcher(ctx context.Context, namespaces []string) {
+	if c.importWatcherCancel != nil {
+		logger.Warning("Import pod watcher already running, not starting another")
+		return
+	}
+
+	c.importWatcherCtx, c.importWatcherCancel = context.WithCancel(ctx)
+
+	logger.Info("Starting import pod watcher for namespaces: %v", namespaces)
+
+	for _, namespace := range namespaces {
+		c.importWatcherWg.Add(1)
+		go func(ns string) {
+			defer c.importWatcherWg.Done()
+			c.runImportPodWatcher(c.importWatcherCtx, ns)
+		}(namespace)
+	}
+}
+
+// stopImportPodWatcher stops the import pod watcher
+func (c *Client) stopImportPodWatcher() {
+	if c.importWatcherCancel != nil {
+		logger.Info("Stopping import pod watcher")
+		c.importWatcherCancel()
+		c.importWatcherWg.Wait()
+		c.importWatcherCancel = nil
+		logger.Info("Import pod watcher stopped")
+	}
+}
+
+// runImportPodWatcher watches import pods in a single namespace with automatic reconnection
+func (c *Client) runImportPodWatcher(ctx context.Context, namespace string) {
+	logger.Info("Starting import pod watcher for namespace: %s", namespace)
+
+	// Reconcile any existing terminal pods on startup
+	if err := c.reconcileExistingImportPods(namespace); err != nil {
+		logger.Error("Failed to reconcile existing import pods in namespace %s: %v", namespace, err)
+	}
+
+	backoff := time.Second
+	maxBackoff := time.Minute
+
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Info("Import pod watcher for namespace %s shutting down", namespace)
+			return
+		default:
+		}
+
+		watcher, err := c.kubernetesClient.CoreV1().Pods(namespace).Watch(ctx, metav1.ListOptions{
+			LabelSelector: ImportPodVMLabel,
+		})
+		if err != nil {
+			logger.Error("Failed to create pod watch for namespace %s: %v, retrying in %v", namespace, err, backoff)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+				backoff = min(backoff*2, maxBackoff)
+				continue
+			}
+		}
+
+		backoff = time.Second
+		logger.Info("Import pod watch for namespace %s created", namespace)
+
+		c.processImportPodEvents(ctx, namespace, watcher)
+
+		logger.Info("Import pod watch for namespace %s ended, reconnecting...", namespace)
+	}
+}
+
+// processImportPodEvents handles events from the import pod watch channel
+func (c *Client) processImportPodEvents(ctx context.Context, namespace string, watcher watch.Interface) {
+	defer watcher.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok := <-watcher.ResultChan():
+			if !ok {
+				return
+			}
+
+			if event.Type != watch.Modified {
+				continue
+			}
+
+			pod, ok := event.Object.(*corev1.Pod)
+			if !ok {
+				u, ok := event.Object.(*unstructured.Unstructured)
+				if !ok {
+					logger.Warning("Unexpected object type in import pod watch event: %T", event.Object)
+					continue
+				}
+				p := &corev1.Pod{}
+				if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, p); err != nil {
+					logger.Error("Failed to convert unstructured to Pod: %v", err)
+					continue
+				}
+				pod = p
+			}
+
+			if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+				c.handleImportPodCompleted(pod)
+			}
+		}
+	}
+}
+
+// handleImportPodCompleted processes a completed/failed import pod
+func (c *Client) handleImportPodCompleted(pod *corev1.Pod) {
+	podLabels := pod.GetLabels()
+	vmName := podLabels[ImportPodVMLabel]
+	deviceName := podLabels[ImportPodVolumeLabel]
+	vmNamespace := pod.Namespace
+
+	if vmName == "" || deviceName == "" {
+		logger.Warning("Import pod %s missing required labels (vm.redfish=%q, volume.vm.redfish=%q)", pod.Name, vmName, deviceName)
+		return
+	}
+
+	if pod.Status.Phase == corev1.PodFailed {
+		logs, logErr := c.kubernetesClient.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, &corev1.PodLogOptions{}).DoRaw(context.Background())
+		if logErr != nil {
+			logger.Error("Import pod %s failed for VM %s/%s. Could not get logs: %v", pod.Name, vmNamespace, vmName, logErr)
+		} else {
+			logger.Error("Import pod %s failed for VM %s/%s. Logs: %s", pod.Name, vmNamespace, vmName, string(logs))
+		}
+	} else {
+		logger.Info("Import pod %s succeeded for VM %s/%s volume %s", pod.Name, vmNamespace, vmName, deviceName)
+	}
+
+	// Remove the importing label from the VM
+	if err := c.removeImportingLabel(vmNamespace, vmName, deviceName); err != nil {
+		logger.Error("Failed to remove importing label from VM %s/%s: %v", vmNamespace, vmName, err)
+	}
+
+	// Delete the completed pod
+	err := c.kubernetesClient.CoreV1().Pods(pod.Namespace).Delete(context.Background(), pod.Name, metav1.DeleteOptions{})
+	if err != nil {
+		logger.Warning("Failed to delete completed import pod %s: %v", pod.Name, err)
+	} else {
+		logger.Info("Deleted completed import pod %s", pod.Name)
+	}
+}
+
+// removeImportingLabel removes the importing.redfish/<deviceName> label from a VM
+func (c *Client) removeImportingLabel(namespace, vmName, deviceName string) error {
+	labelKey := ImportingLabelPrefix + deviceName
+	// A null value in a merge patch removes the key
+	patchJSON := fmt.Sprintf(`{"metadata":{"labels":{%q:null}}}`, labelKey)
+
+	gvr := schema.GroupVersionResource{
+		Group:    "kubevirt.io",
+		Version:  "v1",
+		Resource: "virtualmachines",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+	defer cancel()
+
+	_, err := c.dynamicClient.Resource(gvr).Namespace(namespace).Patch(ctx, vmName, types.MergePatchType, []byte(patchJSON), metav1.PatchOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to remove importing label from VM %s/%s: %w", namespace, vmName, err)
+	}
+	logger.Info("Removed importing label %s from VM %s/%s", labelKey, namespace, vmName)
+	return nil
+}
+
+// reconcileExistingImportPods handles import pods that reached terminal state while the watcher was not running
+func (c *Client) reconcileExistingImportPods(namespace string) error {
+	logger.Info("Reconciling existing import pods in namespace %s", namespace)
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+	defer cancel()
+
+	podList, err := c.kubernetesClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: ImportPodVMLabel,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to list import pods: %w", err)
+	}
+
+	logger.Info("Found %d import pods in namespace %s", len(podList.Items), namespace)
+
+	for i := range podList.Items {
+		pod := &podList.Items[i]
+		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			c.handleImportPodCompleted(pod)
+		}
 	}
 
 	return nil
