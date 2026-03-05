@@ -294,11 +294,11 @@ datavolume:
 
 # Volume configuration for the deployment
 volumes:
-  # Configuration volume (ConfigMap)
+  # Configuration volume (Secret)
   config:
     name: "config-volume"
-    configMap:
-      name: "kubevirt-redfish-config"
+    secret:
+      secretName: "kubevirt-redfish-secret"
   
   # Temporary storage volume
   temp:
@@ -307,21 +307,21 @@ volumes:
       sizeLimit: "50Gi"
 
 # =============================================================================
-# CONFIGMAP CONFIGURATION
+# SECRET CONFIGURATION
 # =============================================================================
 
-# ConfigMap configuration for application settings
-configMap:
-  # Enable/disable ConfigMap creation
+# Secret configuration for application settings (including credentials)
+secret:
+  # Enable/disable Secret creation
   enabled: true
   
-  # ConfigMap name
-  name: "kubevirt-redfish-config"
+  # Secret name
+  name: "kubevirt-redfish-secret"
   
-  # Additional labels for the ConfigMap
+  # Additional labels for the Secret
   labels: {}
   
-  # Additional annotations for the ConfigMap
+  # Additional annotations for the Secret
   annotations: {}
 
 # =============================================================================

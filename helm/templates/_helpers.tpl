@@ -76,8 +76,8 @@ Create the name of the cluster role binding to use
 {{- end }}
 
 {{/*
-Create the name of the config map to use
+Create the name of the config secret to use
 */}}
-{{- define "kubevirt-redfish.configMapName" -}}
-{{- default (include "kubevirt-redfish.fullname" .) .Values.configMap.name }}
+{{- define "kubevirt-redfish.secretName" -}}
+{{- default (include "kubevirt-redfish.fullname" .) .Values.secret.name }}
 {{- end }} 

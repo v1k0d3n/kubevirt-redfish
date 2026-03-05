@@ -88,17 +88,17 @@ deployment:
     - mountPath: /tmp
       name: temp-storage
       readOnly: false
-configMap:
+secret:
   enabled: true
-  name: kubevirt-redfish-config
+  name: kubevirt-redfish-secret
 kubevirt:
   allow_insecure_tls: true
   api_version: v1
   timeout: 60
 volumes:
   config:
-    configMap:
-      name: kubevirt-redfish-config
+    secret:
+      secretName: kubevirt-redfish-secret
     name: config-volume
   temp:
     emptyDir:

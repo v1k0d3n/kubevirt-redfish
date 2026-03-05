@@ -178,8 +178,8 @@ datavolume:
 volumes:
   config:
     name: "config-volume"
-    configMap:
-      name: "kubevirt-redfish-config"
+    secret:
+      secretName: "kubevirt-redfish-secret"
   
   temp:
     name: "temp-storage"
@@ -187,12 +187,12 @@ volumes:
       sizeLimit: "50Gi"
 
 # =============================================================================
-# CONFIGMAP CONFIGURATION
+# SECRET CONFIGURATION
 # =============================================================================
 
-configMap:
+secret:
   enabled: true
-  name: "kubevirt-redfish-config"
+  name: "kubevirt-redfish-secret"
 
 # =============================================================================
 # SECURITY CONTEXT
