@@ -53,6 +53,7 @@ KubeVirt Redfish bridges the gap between traditional virtualization management t
 ### Prerequisites
 
 - Kubernetes cluster with KubeVirt or OpenShift with OpenShift Virtualization
+- **KubeVirt must have the RebootPolicy API enabled for Boot override Once support to work!** (Alpha in kubevirt 1.8 / OCP 4.22)
 - Helm 3.12+ 
 - `kubectl` or `oc` CLI access
 
