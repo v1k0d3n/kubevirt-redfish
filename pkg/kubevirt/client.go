@@ -680,8 +680,8 @@ func (c *Client) SetVMPowerState(namespace, name, state string) error {
 			"target_state":   "Always",
 		})
 
-		// Start the VM by setting runStrategy to Always
-		patch := []byte(`[{"op": "replace", "path": "/spec/runStrategy", "value": "Always"}]`)
+		// Start the VM by setting runStrategy to Always and clearing the legacy running field
+		patch := []byte(`[{"op": "replace", "path": "/spec/runStrategy", "value": "Always"},{"op": "add", "path": "/spec/running", "value": null}]`)
 
 		// Debug: Log before making the API call
 		logger.DebugStructured("Making start API call with dynamic client", map[string]interface{}{
@@ -727,6 +727,7 @@ func (c *Client) SetVMPowerState(namespace, name, state string) error {
 		// This mirrors the behavior of: virtctl stop --grace-period 0 --force <vm name>
 		patch := []byte(`[
 			 {"op": "replace", "path": "/spec/runStrategy", "value": "Halted"},
+			 {"op": "add", "path": "/spec/running", "value": null},
 			 {"op": "add", "path": "/metadata/annotations/kubevirt.io~1force-stop", "value": "true"},
 			 {"op": "replace", "path": "/spec/terminationGracePeriodSeconds", "value": 0}
 		 ]`)
@@ -769,8 +770,8 @@ func (c *Client) SetVMPowerState(namespace, name, state string) error {
 			"target_state":   "Halted",
 		})
 
-		// Graceful stop the VM using runStrategy
-		patch := []byte(`[{"op": "replace", "path": "/spec/runStrategy", "value": "Halted"}]`)
+		// Graceful stop the VM using runStrategy and clearing the legacy running field
+		patch := []byte(`[{"op": "replace", "path": "/spec/runStrategy", "value": "Halted"},{"op": "add", "path": "/spec/running", "value": null}]`)
 
 		// Debug: Log before making the API call
 		logger.DebugStructured("Making graceful stop API call with dynamic client", map[string]interface{}{
@@ -813,6 +814,7 @@ func (c *Client) SetVMPowerState(namespace, name, state string) error {
 		stopPatch := []byte(`[
 			 {"op": "replace", "path": "/spec/terminationGracePeriodSeconds", "value": 0},
 		     {"op": "replace", "path": "/spec/runStrategy", "value": "Halted"},
+			 {"op": "add", "path": "/spec/running", "value": null},
 			 {"op": "add", "path": "/metadata/annotations/kubevirt.io~1force-stop", "value": "true"}
 		 ]`)
 
@@ -851,7 +853,7 @@ func (c *Client) SetVMPowerState(namespace, name, state string) error {
 		})
 		time.Sleep(2 * time.Second)
 
-		startPatch := []byte(`[{"op": "replace", "path": "/spec/runStrategy", "value": "Always"}]`)
+		startPatch := []byte(`[{"op": "replace", "path": "/spec/runStrategy", "value": "Always"},{"op": "add", "path": "/spec/running", "value": null}]`)
 
 		// Debug: Log before making the start API call
 		logger.DebugStructured("Making force restart start API call", map[string]interface{}{
@@ -890,8 +892,8 @@ func (c *Client) SetVMPowerState(namespace, name, state string) error {
 			"method":         "graceful_stop_then_start",
 		})
 
-		// Graceful restart the VM by stopping and starting
-		stopPatch := []byte(`[{"op": "replace", "path": "/spec/runStrategy", "value": "Halted"}]`)
+		// Graceful restart the VM by stopping and starting, clearing the legacy running field
+		stopPatch := []byte(`[{"op": "replace", "path": "/spec/runStrategy", "value": "Halted"},{"op": "add", "path": "/spec/running", "value": null}]`)
 
 		// Debug: Log before making the stop API call
 		logger.DebugStructured("Making graceful restart stop API call", map[string]interface{}{
@@ -928,7 +930,7 @@ func (c *Client) SetVMPowerState(namespace, name, state string) error {
 		})
 		time.Sleep(2 * time.Second)
 
-		startPatch := []byte(`[{"op": "replace", "path": "/spec/runStrategy", "value": "Always"}]`)
+		startPatch := []byte(`[{"op": "replace", "path": "/spec/runStrategy", "value": "Always"},{"op": "add", "path": "/spec/running", "value": null}]`)
 
 		// Debug: Log before making the start API call
 		logger.DebugStructured("Making graceful restart start API call", map[string]interface{}{

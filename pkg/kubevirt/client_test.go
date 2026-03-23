@@ -1029,12 +1029,15 @@ func TestGetVMPowerState(t *testing.T) {
 
 // TestSetVMPowerState tests the SetVMPowerState function using MockDynamicClient
 func TestSetVMPowerState(t *testing.T) {
+	boolPtr := func(b bool) *bool { return &b }
+
 	testCases := []struct {
 		name                string
 		state               string
 		expectErr           bool
 		errSubstr           string
 		expectedRunStrategy string // Expected runStrategy after the operation
+		initialRunning      *bool  // If set, the initial VM uses the legacy running field
 	}{
 		{
 			name:                "Power on",
@@ -1062,6 +1065,30 @@ func TestSetVMPowerState(t *testing.T) {
 			expectErr: true,
 			errSubstr: "unsupported power state",
 		},
+		{
+			name:                "Power off VM with legacy running=true",
+			state:               "GracefulShutdown",
+			initialRunning:      boolPtr(true),
+			expectedRunStrategy: "Halted",
+		},
+		{
+			name:                "Power on VM with legacy running=false",
+			state:               "On",
+			initialRunning:      boolPtr(false),
+			expectedRunStrategy: "Always",
+		},
+		{
+			name:                "Force off VM with legacy running=true",
+			state:               "ForceOff",
+			initialRunning:      boolPtr(true),
+			expectedRunStrategy: "Halted",
+		},
+		{
+			name:                "Force restart VM with legacy running=true",
+			state:               "ForceRestart",
+			initialRunning:      boolPtr(true),
+			expectedRunStrategy: "Always",
+		},
 	}
 
 	for _, tc := range testCases {
@@ -1070,7 +1097,7 @@ func TestSetVMPowerState(t *testing.T) {
 			mockDynamicClient := NewMockDynamicClient()
 			fakeK8sClient := fake.NewSimpleClientset()
 
-			// Setup a VM in the mock with initial runStrategy
+			// Setup a VM in the mock
 			vm := &kubevirtv1.VirtualMachine{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-vm",
@@ -1086,6 +1113,12 @@ func TestSetVMPowerState(t *testing.T) {
 					PrintableStatus: kubevirtv1.VirtualMachinePrintableStatus("Running"),
 				},
 			}
+
+			if tc.initialRunning != nil {
+				// Use the legacy running field alongside runStrategy
+				vm.Spec.Running = tc.initialRunning
+			}
+
 			mockDynamicClient.AddVM(vm)
 
 			// Also add a VMI for some operations that need it
@@ -1134,6 +1167,11 @@ func TestSetVMPowerState(t *testing.T) {
 				if actualRunStrategy != tc.expectedRunStrategy {
 					t.Errorf("Expected runStrategy '%s', got '%s'", tc.expectedRunStrategy, actualRunStrategy)
 				}
+			}
+
+			// Check that the legacy running field was cleared
+			if updatedVM.Spec.Running != nil {
+				t.Errorf("Expected running field to be nil after power state change, but got %v", *updatedVM.Spec.Running)
 			}
 
 			// For ForceOff, also check the force-stop annotation
@@ -2523,10 +2561,10 @@ func TestSetBootOnce(t *testing.T) {
 // TestHandleVMUpdate tests the handleVMUpdate function
 func TestHandleVMUpdate(t *testing.T) {
 	testCases := []struct {
-		name            string
-		setupVM         func(mockClient *MockDynamicClient)
-		setupVMI        func(mockClient *MockDynamicClient)
-		expectRestore   bool
+		name             string
+		setupVM          func(mockClient *MockDynamicClient)
+		setupVMI         func(mockClient *MockDynamicClient)
+		expectRestore    bool
 		expectClearState bool
 	}{
 		{
@@ -2541,8 +2579,8 @@ func TestHandleVMUpdate(t *testing.T) {
 							BootOnceLabel: "enabled",
 						},
 						Annotations: map[string]string{
-							BootOnceOriginalConfigAnnotation:         `[{"diskName":"disk0","bootOrder":1},{"diskName":"cdrom0","bootOrder":2}]`,
-							BootOnceVMIUIDAnnotation:                  "old-vmi-uid",
+							BootOnceOriginalConfigAnnotation:       `[{"diskName":"disk0","bootOrder":1},{"diskName":"cdrom0","bootOrder":2}]`,
+							BootOnceVMIUIDAnnotation:               "old-vmi-uid",
 							"redfish.boot.source.override.enabled": "Once",
 							"redfish.boot.source.override.target":  "Cd",
 						},
@@ -2591,8 +2629,8 @@ func TestHandleVMUpdate(t *testing.T) {
 							BootOnceLabel: "enabled",
 						},
 						Annotations: map[string]string{
-							BootOnceOriginalConfigAnnotation:         `[{"diskName":"disk0","bootOrder":1}]`,
-							BootOnceVMIUIDAnnotation:                  "same-vmi-uid",
+							BootOnceOriginalConfigAnnotation:       `[{"diskName":"disk0","bootOrder":1}]`,
+							BootOnceVMIUIDAnnotation:               "same-vmi-uid",
 							"redfish.boot.source.override.enabled": "Once",
 						},
 					},
@@ -2639,8 +2677,8 @@ func TestHandleVMUpdate(t *testing.T) {
 							BootOnceLabel: "enabled",
 						},
 						Annotations: map[string]string{
-							BootOnceOriginalConfigAnnotation:         `[{"diskName":"disk0","bootOrder":1}]`,
-							BootOnceVMIUIDAnnotation:                  "", // Was off
+							BootOnceOriginalConfigAnnotation:       `[{"diskName":"disk0","bootOrder":1}]`,
+							BootOnceVMIUIDAnnotation:               "", // Was off
 							"redfish.boot.source.override.enabled": "Once",
 						},
 					},
