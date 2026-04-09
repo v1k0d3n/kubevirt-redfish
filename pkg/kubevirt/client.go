@@ -1736,8 +1736,7 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 		logger.Info("Using helper pod for ISO import due to allowInsecureTLS=true and HTTPS URL")
 		logger.Debug("Using helper pod approach for HTTPS URL with allowInsecureTLS=true")
 
-		// Create blank PVC with Block volume mode for ISO files
-		volumeMode := corev1.PersistentVolumeBlock
+		// Create blank PVC for ISO files with volume mode from CDI StorageProfile
 		pvc := &corev1.PersistentVolumeClaim{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      dataVolumeName,
@@ -1747,7 +1746,6 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 				AccessModes: []corev1.PersistentVolumeAccessMode{
 					corev1.ReadWriteOnce,
 				},
-				VolumeMode: &volumeMode,
 				Resources: corev1.VolumeResourceRequirements{
 					Requests: corev1.ResourceList{
 						"storage": resourceMustParse(storageSize),
@@ -1758,7 +1756,9 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 		if storageClass != "" {
 			pvc.Spec.StorageClassName = &storageClass
 			logger.Info("Set storage class %s for PVC %s", storageClass, dataVolumeName)
-			logger.Debug("Set storage class %s for PVC %s", storageClass, dataVolumeName)
+		}
+		if volumeMode := c.getStorageProfileVolumeMode(storageClass); volumeMode != nil {
+			pvc.Spec.VolumeMode = volumeMode
 		}
 
 		logger.Debug("Creating PVC %s in namespace %s", dataVolumeName, namespace)
@@ -1856,8 +1856,7 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 		} else {
 			logger.Info("Created new VolumeImportSource %s for virtual media", volumeImportSourceName)
 		}
-		// Create PVC that references the VolumeImportSource with Block volume mode for ISO files
-		volumeMode := corev1.PersistentVolumeBlock
+		// Create PVC that references the VolumeImportSource with volume mode from CDI StorageProfile
 		pvc := &corev1.PersistentVolumeClaim{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      dataVolumeName,
@@ -1872,7 +1871,6 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 				AccessModes: []corev1.PersistentVolumeAccessMode{
 					corev1.ReadWriteOnce,
 				},
-				VolumeMode: &volumeMode,
 				Resources: corev1.VolumeResourceRequirements{
 					Requests: corev1.ResourceList{
 						"storage": resourceMustParse(storageSize),
@@ -1883,6 +1881,9 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 		if storageClass != "" {
 			pvc.Spec.StorageClassName = &storageClass
 			logger.Info("Set storage class %s for PVC %s", storageClass, dataVolumeName)
+		}
+		if volumeMode := c.getStorageProfileVolumeMode(storageClass); volumeMode != nil {
+			pvc.Spec.VolumeMode = volumeMode
 		}
 		_, err = c.kubernetesClient.CoreV1().PersistentVolumeClaims(namespace).Create(ctx, pvc, metav1.CreateOptions{})
 		if err != nil {
@@ -1905,6 +1906,8 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 // copyISOToPVC creates a helper pod that downloads an ISO and writes it to a PVC.
 // The function returns immediately after creating the pod -- the import pod watcher
 // handles completion detection, VM label cleanup, and pod deletion.
+// The pod spec is built based on the PVC's volume mode: Block uses dd to a raw device,
+// Filesystem uses a direct curl download to a mounted path.
 func (c *Client) copyISOToPVC(namespace, dataVolumeName, imageURL, isoDownloadTimeout, vmName, deviceName string) error {
 	logger.Info("Copying ISO from %s to PVC for DataVolume %s", imageURL, dataVolumeName)
 
@@ -1936,6 +1939,47 @@ func (c *Client) copyISOToPVC(namespace, dataVolumeName, imageURL, isoDownloadTi
 		}
 	}
 
+	// Read the PVC to determine its volume mode
+	pvc, err := c.kubernetesClient.CoreV1().PersistentVolumeClaims(namespace).Get(context.Background(), pvcName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get PVC %s to determine volume mode: %w", pvcName, err)
+	}
+	isBlock := pvc.Spec.VolumeMode != nil && *pvc.Spec.VolumeMode == corev1.PersistentVolumeBlock
+
+	// Build container spec based on volume mode
+	container := corev1.Container{
+		Name:  "copy",
+		Image: helperImage,
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				"memory": resourceMustParse("128Mi"),
+				"cpu":    resourceMustParse("50m"),
+			},
+			Limits: corev1.ResourceList{
+				"memory": resourceMustParse("512Mi"),
+				"cpu":    resourceMustParse("250m"),
+			},
+		},
+	}
+
+	if isBlock {
+		logger.Info("PVC %s uses Block volume mode, helper pod will use dd", pvcName)
+		container.Command = []string{"sh", "-c", fmt.Sprintf(
+			"curl --fail --show-error --insecure --connect-timeout 30 --max-time 1800 --location -o /tmp/%s %s && [ -s /tmp/%s ] && dd if=/tmp/%s of=/dev/block bs=1M conv=fsync",
+			isoFileName, imageURL, isoFileName, isoFileName)}
+		container.VolumeDevices = []corev1.VolumeDevice{
+			{Name: "iso-volume", DevicePath: "/dev/block"},
+		}
+	} else {
+		logger.Info("PVC %s uses Filesystem volume mode, helper pod will download directly", pvcName)
+		container.Command = []string{"sh", "-c", fmt.Sprintf(
+			"curl --fail --show-error --insecure --connect-timeout 30 --max-time 1800 --location -o /mnt/iso/disk.img %s && [ -s /mnt/iso/disk.img ]",
+			imageURL)}
+		container.VolumeMounts = []corev1.VolumeMount{
+			{Name: "iso-volume", MountPath: "/mnt/iso"},
+		}
+	}
+
 	helperPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      helperPodName,
@@ -1947,26 +1991,7 @@ func (c *Client) copyISOToPVC(namespace, dataVolumeName, imageURL, isoDownloadTi
 		},
 		Spec: corev1.PodSpec{
 			RestartPolicy: corev1.RestartPolicyNever,
-			Containers: []corev1.Container{
-				{
-					Name:    "copy",
-					Image:   helperImage,
-					Command: []string{"sh", "-c", fmt.Sprintf("curl --fail --show-error --insecure --connect-timeout 30 --max-time 1800 --location -o /tmp/%s %s && [ -s /tmp/%s ] && dd if=/tmp/%s of=/dev/block bs=1M conv=fsync", isoFileName, imageURL, isoFileName, isoFileName)},
-					VolumeDevices: []corev1.VolumeDevice{
-						{Name: "iso-volume", DevicePath: "/dev/block"},
-					},
-					Resources: corev1.ResourceRequirements{
-						Requests: corev1.ResourceList{
-							"memory": resourceMustParse("128Mi"),
-							"cpu":    resourceMustParse("50m"),
-						},
-						Limits: corev1.ResourceList{
-							"memory": resourceMustParse("512Mi"),
-							"cpu":    resourceMustParse("250m"),
-						},
-					},
-				},
-			},
+			Containers:    []corev1.Container{container},
 			Volumes: []corev1.Volume{
 				{Name: "iso-volume", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: pvcName}}},
 			},
@@ -2634,6 +2659,48 @@ func (c *Client) getDataVolumeConfig() (storageSize string, allowInsecureTLS boo
 
 	logger.Info("Final DataVolume config: storageSize=%s, allowInsecureTLS=%v, storageClass=%s, vmUpdateTimeout=%s, isoDownloadTimeout=%s, helperImage=%s", storageSize, allowInsecureTLS, storageClass, vmUpdateTimeout, isoDownloadTimeout, helperImage)
 	return storageSize, allowInsecureTLS, storageClass, vmUpdateTimeout, isoDownloadTimeout, helperImage
+}
+
+// getStorageProfileVolumeMode queries the CDI StorageProfile for the given storage class
+// and returns the preferred volume mode. Falls back to Filesystem if the StorageProfile
+// is not available (e.g. CDI not installed or storage class not recognized).
+func (c *Client) getStorageProfileVolumeMode(storageClass string) *corev1.PersistentVolumeMode {
+	if storageClass == "" {
+		logger.Debug("No storage class specified, using default Filesystem volume mode")
+		return nil
+	}
+
+	gvr := schema.GroupVersionResource{
+		Group:    "cdi.kubevirt.io",
+		Version:  "v1beta1",
+		Resource: "storageprofiles",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// StorageProfiles are cluster-scoped and named after the StorageClass
+	spUnstructured, err := c.dynamicClient.Resource(gvr).Get(ctx, storageClass, metav1.GetOptions{})
+	if err != nil {
+		logger.Debug("Could not fetch StorageProfile for %s (CDI may not be available): %v", storageClass, err)
+		return nil
+	}
+
+	// Extract status.claimPropertySets[0].volumeMode
+	sp := &cdiv1beta1.StorageProfile{}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(spUnstructured.Object, sp); err != nil {
+		logger.Debug("Could not convert StorageProfile for %s: %v", storageClass, err)
+		return nil
+	}
+
+	if len(sp.Status.ClaimPropertySets) > 0 && sp.Status.ClaimPropertySets[0].VolumeMode != nil {
+		mode := *sp.Status.ClaimPropertySets[0].VolumeMode
+		logger.Info("StorageProfile for %s recommends volume mode: %s", storageClass, mode)
+		return &mode
+	}
+
+	logger.Debug("StorageProfile for %s has no claimPropertySets, using default Filesystem volume mode", storageClass)
+	return nil
 }
 
 // getKubeVirtConfig returns KubeVirt configuration from app config

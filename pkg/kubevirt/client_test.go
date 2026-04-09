@@ -3086,3 +3086,134 @@ func TestSetPowerAfterImportLabel_VMNotFound(t *testing.T) {
 		t.Error("Expected error for nonexistent VM")
 	}
 }
+
+func TestGetStorageProfileVolumeMode(t *testing.T) {
+	block := corev1.PersistentVolumeBlock
+	filesystem := corev1.PersistentVolumeFilesystem
+
+	tests := []struct {
+		name         string
+		storageClass string
+		profile      *cdiv1beta1.StorageProfile
+		wantMode     *corev1.PersistentVolumeMode
+	}{
+		{
+			name:         "empty storage class returns nil",
+			storageClass: "",
+			profile:      nil,
+			wantMode:     nil,
+		},
+		{
+			name:         "missing StorageProfile returns nil",
+			storageClass: "no-such-class",
+			profile:      nil,
+			wantMode:     nil,
+		},
+		{
+			name:         "StorageProfile with Block volume mode",
+			storageClass: "block-storage",
+			profile: &cdiv1beta1.StorageProfile{
+				ObjectMeta: metav1.ObjectMeta{Name: "block-storage"},
+				Status: cdiv1beta1.StorageProfileStatus{
+					ClaimPropertySets: []cdiv1beta1.ClaimPropertySet{
+						{
+							AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+							VolumeMode:  &block,
+						},
+					},
+				},
+			},
+			wantMode: &block,
+		},
+		{
+			name:         "StorageProfile with Filesystem volume mode",
+			storageClass: "fs-storage",
+			profile: &cdiv1beta1.StorageProfile{
+				ObjectMeta: metav1.ObjectMeta{Name: "fs-storage"},
+				Status: cdiv1beta1.StorageProfileStatus{
+					ClaimPropertySets: []cdiv1beta1.ClaimPropertySet{
+						{
+							AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+							VolumeMode:  &filesystem,
+						},
+					},
+				},
+			},
+			wantMode: &filesystem,
+		},
+		{
+			name:         "StorageProfile with multiple property sets uses first",
+			storageClass: "multi-storage",
+			profile: &cdiv1beta1.StorageProfile{
+				ObjectMeta: metav1.ObjectMeta{Name: "multi-storage"},
+				Status: cdiv1beta1.StorageProfileStatus{
+					ClaimPropertySets: []cdiv1beta1.ClaimPropertySet{
+						{
+							AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+							VolumeMode:  &block,
+						},
+						{
+							AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+							VolumeMode:  &filesystem,
+						},
+					},
+				},
+			},
+			wantMode: &block,
+		},
+		{
+			name:         "StorageProfile with empty claimPropertySets returns nil",
+			storageClass: "empty-profile",
+			profile: &cdiv1beta1.StorageProfile{
+				ObjectMeta: metav1.ObjectMeta{Name: "empty-profile"},
+				Status:     cdiv1beta1.StorageProfileStatus{},
+			},
+			wantMode: nil,
+		},
+		{
+			name:         "StorageProfile with nil VolumeMode in first property set returns nil",
+			storageClass: "nil-mode",
+			profile: &cdiv1beta1.StorageProfile{
+				ObjectMeta: metav1.ObjectMeta{Name: "nil-mode"},
+				Status: cdiv1beta1.StorageProfileStatus{
+					ClaimPropertySets: []cdiv1beta1.ClaimPropertySet{
+						{
+							AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+							VolumeMode:  nil,
+						},
+					},
+				},
+			},
+			wantMode: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockDynamicClient := NewMockDynamicClient()
+			fakeK8sClient := fake.NewSimpleClientset()
+			client := NewClientWithClients(fakeK8sClient, mockDynamicClient, 30*time.Second, nil)
+
+			if tt.profile != nil {
+				if err := mockDynamicClient.AddStorageProfile(tt.profile); err != nil {
+					t.Fatalf("Failed to add StorageProfile: %v", err)
+				}
+			}
+
+			got := client.getStorageProfileVolumeMode(tt.storageClass)
+
+			if tt.wantMode == nil {
+				if got != nil {
+					t.Errorf("expected nil volume mode, got %v", *got)
+				}
+			} else {
+				if got == nil {
+					t.Fatalf("expected volume mode %v, got nil", *tt.wantMode)
+				}
+				if *got != *tt.wantMode {
+					t.Errorf("expected volume mode %v, got %v", *tt.wantMode, *got)
+				}
+			}
+		})
+	}
+}

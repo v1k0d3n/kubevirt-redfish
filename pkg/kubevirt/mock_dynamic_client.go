@@ -28,11 +28,13 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 	kubevirtv1 "kubevirt.io/api/core/v1"
+	cdiv1beta1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
 )
 
 // deepCopyUnstructured creates a deep copy of an unstructured object using JSON marshaling.
@@ -157,6 +159,27 @@ func (m *MockDynamicClient) AddVMI(vmi *kubevirtv1.VirtualMachineInstance) error
 		Resource: "virtualmachineinstances",
 	}
 	m.addResource(gvr, vmi.Namespace, vmi.Name, u)
+	return nil
+}
+
+// AddStorageProfile adds a CDI StorageProfile to the mock client.
+// StorageProfiles are cluster-scoped and named after the StorageClass.
+func (m *MockDynamicClient) AddStorageProfile(sp *cdiv1beta1.StorageProfile) error {
+	u, err := runtime.DefaultUnstructuredConverter.ToUnstructured(sp)
+	if err != nil {
+		return fmt.Errorf("failed to convert StorageProfile to unstructured: %w", err)
+	}
+	obj := &unstructured.Unstructured{Object: u}
+	obj.SetAPIVersion("cdi.kubevirt.io/v1beta1")
+	obj.SetKind("StorageProfile")
+
+	gvr := schema.GroupVersionResource{
+		Group:    "cdi.kubevirt.io",
+		Version:  "v1beta1",
+		Resource: "storageprofiles",
+	}
+	// Cluster-scoped: namespace is empty
+	m.addResource(gvr, "", sp.Name, obj)
 	return nil
 }
 
