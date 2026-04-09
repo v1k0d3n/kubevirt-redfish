@@ -1122,10 +1122,14 @@ func TestSetVMPowerState(t *testing.T) {
 			mockDynamicClient.AddVM(vm)
 
 			// Also add a VMI for some operations that need it
+			gracePeriod := int64(30)
 			vmi := &kubevirtv1.VirtualMachineInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-vm",
 					Namespace: "test-namespace",
+				},
+				Spec: kubevirtv1.VirtualMachineInstanceSpec{
+					TerminationGracePeriodSeconds: &gracePeriod,
 				},
 				Status: kubevirtv1.VirtualMachineInstanceStatus{
 					Phase: kubevirtv1.Running,
@@ -1179,6 +1183,19 @@ func TestSetVMPowerState(t *testing.T) {
 				annotations := updatedVM.GetAnnotations()
 				if annotations == nil || annotations["kubevirt.io/force-stop"] != "true" {
 					t.Errorf("Expected force-stop annotation to be set for ForceOff state")
+				}
+			}
+
+			// For ForceOff and ForceRestart, verify terminationGracePeriodSeconds was set to 0 on the VMI
+			if tc.state == "ForceOff" || tc.state == "ForceRestart" {
+				updatedVMI, err := mockDynamicClient.GetVMI("test-namespace", "test-vm")
+				if err != nil {
+					t.Fatalf("Failed to retrieve updated VMI from mock: %v", err)
+				}
+				if updatedVMI.Spec.TerminationGracePeriodSeconds == nil {
+					t.Error("Expected VMI terminationGracePeriodSeconds to be set, got nil")
+				} else if *updatedVMI.Spec.TerminationGracePeriodSeconds != 0 {
+					t.Errorf("Expected VMI terminationGracePeriodSeconds=0, got %d", *updatedVMI.Spec.TerminationGracePeriodSeconds)
 				}
 			}
 		})

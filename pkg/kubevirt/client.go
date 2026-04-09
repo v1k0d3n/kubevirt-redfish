@@ -563,6 +563,32 @@ func (c *Client) GetVMI(namespace, name string) (*kubevirtv1.VirtualMachineInsta
 	return vmi, nil
 }
 
+// patchVMIGracePeriod sets terminationGracePeriodSeconds to 0 on the running VMI
+// so that a subsequent force stop takes effect immediately. If no VMI is running,
+// this is a no-op.
+func (c *Client) patchVMIGracePeriod(ctx context.Context, namespace, name, correlationID string) {
+	vmiGVR := schema.GroupVersionResource{
+		Group:    "kubevirt.io",
+		Version:  "v1",
+		Resource: "virtualmachineinstances",
+	}
+
+	gracePatch := []byte(`[{"op": "replace", "path": "/spec/terminationGracePeriodSeconds", "value": 0}]`)
+
+	_, err := c.dynamicClient.Resource(vmiGVR).Namespace(namespace).Patch(
+		ctx, name, types.JSONPatchType, gracePatch, metav1.PatchOptions{})
+	if err != nil {
+		logger.DebugStructured("Could not patch VMI terminationGracePeriodSeconds (VMI may not be running)", map[string]interface{}{
+			"correlation_id": correlationID,
+			"namespace":      namespace,
+			"resource":       name,
+			"error":          err.Error(),
+		})
+	} else {
+		logger.Info("Set terminationGracePeriodSeconds=0 on VMI %s/%s", namespace, name)
+	}
+}
+
 // GetVMPowerState gets the power state of a VirtualMachine
 func (c *Client) GetVMPowerState(namespace, name string) (string, error) {
 	// Check if dynamicClient is initialized
@@ -717,19 +743,21 @@ func (c *Client) SetVMPowerState(namespace, name, state string) error {
 			"operation":      "force_stop_vm",
 			"namespace":      namespace,
 			"resource":       name,
-			"method":         "patch_runstrategy_annotation_and_grace_period",
+			"method":         "patch_vmi_grace_period_then_vm_runstrategy",
 			"target_state":   "Halted",
 			"force_stop":     true,
 			"grace_period":   0,
 		})
 
-		// Force stop the VM using runStrategy, force-stop annotation, and zero grace period
+		// Set terminationGracePeriodSeconds=0 on the running VMI so the kill is immediate
+		c.patchVMIGracePeriod(ctx, namespace, name, correlationID)
+
+		// Force stop the VM using runStrategy and force-stop annotation
 		// This mirrors the behavior of: virtctl stop --grace-period 0 --force <vm name>
 		patch := []byte(`[
 			 {"op": "replace", "path": "/spec/runStrategy", "value": "Halted"},
 			 {"op": "add", "path": "/spec/running", "value": null},
-			 {"op": "add", "path": "/metadata/annotations/kubevirt.io~1force-stop", "value": "true"},
-			 {"op": "replace", "path": "/spec/terminationGracePeriodSeconds", "value": 0}
+			 {"op": "add", "path": "/metadata/annotations/kubevirt.io~1force-stop", "value": "true"}
 		 ]`)
 
 		// Debug: Log before making the API call
@@ -807,12 +835,14 @@ func (c *Client) SetVMPowerState(namespace, name, state string) error {
 			"operation":      "force_restart_vm",
 			"namespace":      namespace,
 			"resource":       name,
-			"method":         "force_stop_then_start",
+			"method":         "patch_vmi_grace_period_then_force_stop_start",
 		})
 
-		// Force restart the VM by force stopping (with zero grace period) and starting
+		// Set terminationGracePeriodSeconds=0 on the running VMI so the kill is immediate
+		c.patchVMIGracePeriod(ctx, namespace, name, correlationID)
+
+		// Force restart the VM by force stopping and starting
 		stopPatch := []byte(`[
-			 {"op": "replace", "path": "/spec/terminationGracePeriodSeconds", "value": 0},
 		     {"op": "replace", "path": "/spec/runStrategy", "value": "Halted"},
 			 {"op": "add", "path": "/spec/running", "value": null},
 			 {"op": "add", "path": "/metadata/annotations/kubevirt.io~1force-stop", "value": "true"}
