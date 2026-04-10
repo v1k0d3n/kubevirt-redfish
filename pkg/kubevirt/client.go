@@ -1793,49 +1793,9 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 
 		logger.Debug("Creating PVC %s in namespace %s", dataVolumeName, namespace)
 
-		// Check if PVC already exists and validate its state
-		existingPVC, err := c.kubernetesClient.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, dataVolumeName, metav1.GetOptions{})
-		if err == nil {
-			// PVC exists, check its state
-			if c.isPVCUsable(existingPVC) {
-				logger.Info("PVC %s already exists and is usable, reusing it", dataVolumeName)
-				logger.Debug("PVC %s already exists and is usable, reusing it", dataVolumeName)
-			} else {
-				logger.Info("PVC %s exists but is not usable (status: %s), deleting and recreating", dataVolumeName, existingPVC.Status.Phase)
-				logger.Debug("PVC %s exists but is not usable, deleting and recreating", dataVolumeName)
-				// Delete the unusable PVC
-				err = c.kubernetesClient.CoreV1().PersistentVolumeClaims(namespace).Delete(ctx, dataVolumeName, metav1.DeleteOptions{})
-				if err != nil {
-					logger.Error("Failed to delete unusable PVC %s: %v", dataVolumeName, err)
-					return fmt.Errorf("failed to delete unusable PVC: %w", err)
-				}
-				// Wait a moment for deletion to complete
-				time.Sleep(2 * time.Second)
-			}
+		if err := c.ensurePVC(ctx, namespace, pvc); err != nil {
+			return err
 		}
-
-		// Create the PVC with retry logic
-		err = c.retryWithBackoff(fmt.Sprintf("create PVC %s", dataVolumeName), func() error {
-			var createErr error
-			_, createErr = c.kubernetesClient.CoreV1().PersistentVolumeClaims(namespace).Create(ctx, pvc, metav1.CreateOptions{})
-			if createErr != nil {
-				if strings.Contains(createErr.Error(), "already exists") {
-					logger.Debug("PVC %s already exists (race condition), will use existing PVC", dataVolumeName)
-					// PVC already exists, we can use it
-					return nil // Success - we'll use the existing PVC
-				}
-				logger.Error("Failed to create PVC %s: %v", dataVolumeName, createErr)
-				return fmt.Errorf("failed to create PVC: %w", createErr)
-			}
-			return nil
-		})
-
-		if err != nil {
-			return fmt.Errorf("failed to create PVC after retries: %w", err)
-		}
-
-		logger.Info("Created new PVC %s for virtual media", dataVolumeName)
-		logger.Debug("Successfully created new PVC %s for virtual media", dataVolumeName)
 
 		// Create helper pod to copy ISO to PVC (non-blocking, pod watcher handles completion)
 		if err := c.copyISOToPVC(namespace, dataVolumeName, imageURL, isoDownloadTimeout, name, deviceName); err != nil {
@@ -1915,15 +1875,8 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 		if volumeMode := c.getStorageProfileVolumeMode(storageClass); volumeMode != nil {
 			pvc.Spec.VolumeMode = volumeMode
 		}
-		_, err = c.kubernetesClient.CoreV1().PersistentVolumeClaims(namespace).Create(ctx, pvc, metav1.CreateOptions{})
-		if err != nil {
-			if strings.Contains(err.Error(), "already exists") {
-				logger.Info("PVC %s already exists, reusing it", dataVolumeName)
-			} else {
-				return fmt.Errorf("failed to create PVC: %w", err)
-			}
-		} else {
-			logger.Info("Created new PVC %s for virtual media", dataVolumeName)
+		if err := c.ensurePVC(ctx, namespace, pvc); err != nil {
+			return err
 		}
 		logger.Info("VolumeImportSource and PVC created for HTTP import")
 		logger.Info("CDI will handle the ISO download and import")
@@ -2789,6 +2742,38 @@ func (c *Client) isPVCUsable(pvc *corev1.PersistentVolumeClaim) bool {
 
 	// Lost or other states are not usable
 	return false
+}
+
+// ensurePVC checks whether a PVC with the given name already exists. If it exists
+// and is usable (Bound or Pending without failure), it is reused. If it exists but
+// is not usable (Lost, failed), it is deleted and recreated. If it does not exist,
+// it is created.
+func (c *Client) ensurePVC(ctx context.Context, namespace string, pvc *corev1.PersistentVolumeClaim) error {
+	name := pvc.Name
+
+	existing, err := c.kubernetesClient.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err == nil {
+		if c.isPVCUsable(existing) {
+			logger.Info("PVC %s already exists and is usable, reusing it", name)
+			return nil
+		}
+		logger.Info("PVC %s exists but is not usable (phase: %s), deleting and recreating", name, existing.Status.Phase)
+		if delErr := c.kubernetesClient.CoreV1().PersistentVolumeClaims(namespace).Delete(ctx, name, metav1.DeleteOptions{}); delErr != nil {
+			return fmt.Errorf("failed to delete unusable PVC %s: %w", name, delErr)
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	_, err = c.kubernetesClient.CoreV1().PersistentVolumeClaims(namespace).Create(ctx, pvc, metav1.CreateOptions{})
+	if err != nil {
+		if strings.Contains(err.Error(), "already exists") {
+			logger.Info("PVC %s was created concurrently, reusing it", name)
+			return nil
+		}
+		return fmt.Errorf("failed to create PVC %s: %w", name, err)
+	}
+	logger.Info("Created new PVC %s for virtual media", name)
+	return nil
 }
 
 // sanitizeResourceName sanitizes a resource name to ensure it is a valid Kubernetes resource name
