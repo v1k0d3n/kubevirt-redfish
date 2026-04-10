@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	cdiv1beta1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
@@ -3230,6 +3231,496 @@ func TestGetStorageProfileVolumeMode(t *testing.T) {
 				if *got != *tt.wantMode {
 					t.Errorf("expected volume mode %v, got %v", *tt.wantMode, *got)
 				}
+			}
+		})
+	}
+}
+
+func TestEnsurePVC(t *testing.T) {
+	tests := []struct {
+		name         string
+		existingPVC  *corev1.PersistentVolumeClaim
+		expectErr    bool
+		expectCreate bool // true if ensurePVC should create a new PVC (vs reuse)
+	}{
+		{
+			name:         "no existing PVC creates a new one",
+			existingPVC:  nil,
+			expectCreate: true,
+		},
+		{
+			name: "existing Bound PVC is reused without recreation",
+			existingPVC: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pvc",
+					Namespace: "test-ns",
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							"storage": resource.MustParse("10Gi"),
+						},
+					},
+				},
+				Status: corev1.PersistentVolumeClaimStatus{
+					Phase: corev1.ClaimBound,
+				},
+			},
+			expectCreate: false,
+		},
+		{
+			name: "existing Pending PVC is reused without recreation",
+			existingPVC: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pvc",
+					Namespace: "test-ns",
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							"storage": resource.MustParse("10Gi"),
+						},
+					},
+				},
+				Status: corev1.PersistentVolumeClaimStatus{
+					Phase: corev1.ClaimPending,
+				},
+			},
+			expectCreate: false,
+		},
+		{
+			name: "existing Lost PVC is deleted and recreated",
+			existingPVC: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pvc",
+					Namespace: "test-ns",
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							"storage": resource.MustParse("10Gi"),
+						},
+					},
+				},
+				Status: corev1.PersistentVolumeClaimStatus{
+					Phase: corev1.ClaimLost,
+				},
+			},
+			expectCreate: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var objs []runtime.Object
+			if tt.existingPVC != nil {
+				objs = append(objs, tt.existingPVC)
+			}
+			fakeK8sClient := fake.NewSimpleClientset(objs...)
+			mockDynamicClient := NewMockDynamicClient()
+			client := NewClientWithClients(fakeK8sClient, mockDynamicClient, 30*time.Second, nil)
+
+			pvc := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pvc",
+					Namespace: "test-ns",
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							"storage": resource.MustParse("10Gi"),
+						},
+					},
+				},
+			}
+
+			ctx := context.Background()
+			err := client.ensurePVC(ctx, "test-ns", pvc)
+			if tt.expectErr {
+				if err == nil {
+					t.Fatal("expected error but got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			got, err := fakeK8sClient.CoreV1().PersistentVolumeClaims("test-ns").Get(ctx, "test-pvc", metav1.GetOptions{})
+			if err != nil {
+				t.Fatalf("PVC should exist after ensurePVC: %v", err)
+			}
+
+			if tt.expectCreate {
+				// Newly created PVC won't have Bound status in fake client
+				if got.Status.Phase == corev1.ClaimBound {
+					t.Error("expected newly created PVC, but got a Bound one (was not recreated)")
+				}
+			} else {
+				// Reused PVC should retain its original phase
+				if got.Status.Phase != tt.existingPVC.Status.Phase {
+					t.Errorf("expected reused PVC phase %s, got %s", tt.existingPVC.Status.Phase, got.Status.Phase)
+				}
+			}
+		})
+	}
+}
+
+// setupInsertVirtualMediaTest creates the common mock objects for insertVirtualMediaAsync tests.
+// It returns the client and mock dynamic client. The VM is pre-configured in the mock.
+func setupInsertVirtualMediaTest(t *testing.T, allowInsecureTLS bool, existingPVCs ...corev1.PersistentVolumeClaim) (*Client, *MockDynamicClient, *fake.Clientset) {
+	t.Helper()
+
+	var objs []runtime.Object
+	for i := range existingPVCs {
+		objs = append(objs, &existingPVCs[i])
+	}
+	fakeK8sClient := fake.NewSimpleClientset(objs...)
+	mockDynamicClient := NewMockDynamicClient()
+
+	mockConfig := &MockConfig{}
+	mockConfig.dataVolumeConfig.storageSize = "10Gi"
+	mockConfig.dataVolumeConfig.allowInsecureTLS = allowInsecureTLS
+	mockConfig.dataVolumeConfig.storageClass = ""
+	mockConfig.dataVolumeConfig.vmUpdateTimeout = "30s"
+	mockConfig.dataVolumeConfig.isoDownloadTimeout = "30m"
+	mockConfig.dataVolumeConfig.helperImage = "alpine:latest"
+
+	vm := &kubevirtv1.VirtualMachine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-vm",
+			Namespace: "test-ns",
+		},
+		Spec: kubevirtv1.VirtualMachineSpec{
+			Template: &kubevirtv1.VirtualMachineInstanceTemplateSpec{
+				Spec: kubevirtv1.VirtualMachineInstanceSpec{
+					Domain: kubevirtv1.DomainSpec{
+						Devices: kubevirtv1.Devices{},
+					},
+				},
+			},
+		},
+	}
+	if err := mockDynamicClient.AddVM(vm); err != nil {
+		t.Fatalf("Failed to add VM: %v", err)
+	}
+
+	client := NewClientWithClients(fakeK8sClient, mockDynamicClient, 30*time.Second, mockConfig)
+	return client, mockDynamicClient, fakeK8sClient
+}
+
+func TestInsertVirtualMediaAsync_HTTPFlow(t *testing.T) {
+	tests := []struct {
+		name        string
+		existingPVC *corev1.PersistentVolumeClaim
+		wantReuse   bool
+	}{
+		{
+			name:      "HTTP with no existing PVC creates new PVC and VolumeImportSource",
+			wantReuse: false,
+		},
+		{
+			name: "HTTP with existing Bound PVC reuses it",
+			existingPVC: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "override-pvc",
+					Namespace: "test-ns",
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							"storage": resource.MustParse("10Gi"),
+						},
+					},
+				},
+				Status: corev1.PersistentVolumeClaimStatus{
+					Phase: corev1.ClaimBound,
+				},
+			},
+			wantReuse: true,
+		},
+		{
+			name: "HTTP with existing Lost PVC deletes and recreates",
+			existingPVC: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "override-pvc",
+					Namespace: "test-ns",
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							"storage": resource.MustParse("10Gi"),
+						},
+					},
+				},
+				Status: corev1.PersistentVolumeClaimStatus{
+					Phase: corev1.ClaimLost,
+				},
+			},
+			wantReuse: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var pvcs []corev1.PersistentVolumeClaim
+			if tt.existingPVC != nil {
+				pvcs = append(pvcs, *tt.existingPVC)
+			}
+			client, _, fakeK8s := setupInsertVirtualMediaTest(t, false, pvcs...)
+
+			// HTTP flow: allowInsecureTLS=false, scheme=http -> CDI path
+			err := client.insertVirtualMediaAsync("test-ns", "test-vm", "cdrom0", "http://example.com/image.iso")
+			if err != nil {
+				t.Fatalf("insertVirtualMediaAsync failed: %v", err)
+			}
+
+			// Verify that exactly one PVC was created (the generated unique name)
+			pvcList, err := fakeK8s.CoreV1().PersistentVolumeClaims("test-ns").List(context.Background(), metav1.ListOptions{})
+			if err != nil {
+				t.Fatalf("Failed to list PVCs: %v", err)
+			}
+
+			if tt.existingPVC != nil && tt.wantReuse {
+				// Existing usable PVC + the new generated one
+				if len(pvcList.Items) < 1 {
+					t.Error("Expected at least one PVC to exist")
+				}
+			} else {
+				if len(pvcList.Items) < 1 {
+					t.Error("Expected at least one PVC to be created")
+				}
+			}
+
+			// Verify VM was updated with cdrom0 disk and volume
+			updatedVM, err := client.GetVM("test-ns", "test-vm")
+			if err != nil {
+				t.Fatalf("Failed to get VM: %v", err)
+			}
+
+			foundDisk := false
+			for _, disk := range updatedVM.Spec.Template.Spec.Domain.Devices.Disks {
+				if disk.Name == "cdrom0" && disk.CDRom != nil {
+					foundDisk = true
+					break
+				}
+			}
+			if !foundDisk {
+				t.Error("Expected cdrom0 disk to be added to VM")
+			}
+
+			foundVolume := false
+			for _, vol := range updatedVM.Spec.Template.Spec.Volumes {
+				if vol.Name == "cdrom0" && vol.PersistentVolumeClaim != nil {
+					foundVolume = true
+					break
+				}
+			}
+			if !foundVolume {
+				t.Error("Expected cdrom0 volume to be added to VM")
+			}
+		})
+	}
+}
+
+func TestInsertVirtualMediaAsync_HTTPSFlow(t *testing.T) {
+	tests := []struct {
+		name        string
+		existingPVC *corev1.PersistentVolumeClaim
+		wantReuse   bool
+	}{
+		{
+			name:      "HTTPS with no existing PVC creates new PVC via CDI",
+			wantReuse: false,
+		},
+		{
+			name: "HTTPS with existing Bound PVC reuses it",
+			existingPVC: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "override-pvc",
+					Namespace: "test-ns",
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							"storage": resource.MustParse("10Gi"),
+						},
+					},
+				},
+				Status: corev1.PersistentVolumeClaimStatus{
+					Phase: corev1.ClaimBound,
+				},
+			},
+			wantReuse: true,
+		},
+		{
+			name: "HTTPS with existing Lost PVC deletes and recreates",
+			existingPVC: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "override-pvc",
+					Namespace: "test-ns",
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							"storage": resource.MustParse("10Gi"),
+						},
+					},
+				},
+				Status: corev1.PersistentVolumeClaimStatus{
+					Phase: corev1.ClaimLost,
+				},
+			},
+			wantReuse: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var pvcs []corev1.PersistentVolumeClaim
+			if tt.existingPVC != nil {
+				pvcs = append(pvcs, *tt.existingPVC)
+			}
+			// allowInsecureTLS=false + https -> CDI path (same as HTTP)
+			client, _, fakeK8s := setupInsertVirtualMediaTest(t, false, pvcs...)
+
+			err := client.insertVirtualMediaAsync("test-ns", "test-vm", "cdrom0", "https://example.com/image.iso")
+			if err != nil {
+				t.Fatalf("insertVirtualMediaAsync failed: %v", err)
+			}
+
+			pvcList, err := fakeK8s.CoreV1().PersistentVolumeClaims("test-ns").List(context.Background(), metav1.ListOptions{})
+			if err != nil {
+				t.Fatalf("Failed to list PVCs: %v", err)
+			}
+			if len(pvcList.Items) < 1 {
+				t.Error("Expected at least one PVC to exist")
+			}
+
+			updatedVM, err := client.GetVM("test-ns", "test-vm")
+			if err != nil {
+				t.Fatalf("Failed to get VM: %v", err)
+			}
+
+			foundDisk := false
+			for _, disk := range updatedVM.Spec.Template.Spec.Domain.Devices.Disks {
+				if disk.Name == "cdrom0" && disk.CDRom != nil {
+					foundDisk = true
+				}
+			}
+			if !foundDisk {
+				t.Error("Expected cdrom0 disk to be added to VM")
+			}
+		})
+	}
+}
+
+func TestInsertVirtualMediaAsync_InsecureHTTPSFlow(t *testing.T) {
+	tests := []struct {
+		name        string
+		existingPVC *corev1.PersistentVolumeClaim
+		wantReuse   bool
+	}{
+		{
+			name:      "insecure HTTPS with no existing PVC creates new PVC via helper pod",
+			wantReuse: false,
+		},
+		{
+			name: "insecure HTTPS with existing Bound PVC reuses it",
+			existingPVC: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "override-pvc",
+					Namespace: "test-ns",
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							"storage": resource.MustParse("10Gi"),
+						},
+					},
+				},
+				Status: corev1.PersistentVolumeClaimStatus{
+					Phase: corev1.ClaimBound,
+				},
+			},
+			wantReuse: true,
+		},
+		{
+			name: "insecure HTTPS with existing Lost PVC deletes and recreates",
+			existingPVC: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "override-pvc",
+					Namespace: "test-ns",
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							"storage": resource.MustParse("10Gi"),
+						},
+					},
+				},
+				Status: corev1.PersistentVolumeClaimStatus{
+					Phase: corev1.ClaimLost,
+				},
+			},
+			wantReuse: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var pvcs []corev1.PersistentVolumeClaim
+			if tt.existingPVC != nil {
+				pvcs = append(pvcs, *tt.existingPVC)
+			}
+			// allowInsecureTLS=true + https -> helper pod path
+			client, _, fakeK8s := setupInsertVirtualMediaTest(t, true, pvcs...)
+
+			err := client.insertVirtualMediaAsync("test-ns", "test-vm", "cdrom0", "https://example.com/image.iso")
+			if err != nil {
+				t.Fatalf("insertVirtualMediaAsync failed: %v", err)
+			}
+
+			pvcList, err := fakeK8s.CoreV1().PersistentVolumeClaims("test-ns").List(context.Background(), metav1.ListOptions{})
+			if err != nil {
+				t.Fatalf("Failed to list PVCs: %v", err)
+			}
+			if len(pvcList.Items) < 1 {
+				t.Error("Expected at least one PVC to exist")
+			}
+
+			// Verify helper pod was created
+			podList, err := fakeK8s.CoreV1().Pods("test-ns").List(context.Background(), metav1.ListOptions{})
+			if err != nil {
+				t.Fatalf("Failed to list pods: %v", err)
+			}
+			if len(podList.Items) < 1 {
+				t.Error("Expected helper pod to be created for insecure HTTPS flow")
+			}
+
+			updatedVM, err := client.GetVM("test-ns", "test-vm")
+			if err != nil {
+				t.Fatalf("Failed to get VM: %v", err)
+			}
+
+			foundDisk := false
+			for _, disk := range updatedVM.Spec.Template.Spec.Domain.Devices.Disks {
+				if disk.Name == "cdrom0" && disk.CDRom != nil {
+					foundDisk = true
+				}
+			}
+			if !foundDisk {
+				t.Error("Expected cdrom0 disk to be added to VM")
 			}
 		})
 	}
