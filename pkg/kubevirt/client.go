@@ -1904,7 +1904,7 @@ func (c *Client) copyISOToPVC(namespace, dataVolumeName, imageURL, isoDownloadTi
 	isoFileName := filepath.Base(imageURL)
 
 	timestamp := time.Now().Unix()
-	helperPodName := fmt.Sprintf("copy-iso-%s-%d", dataVolumeName, timestamp)
+	helperPodName := sanitizeResourceName(fmt.Sprintf("copy-iso-%s-%d", dataVolumeName, timestamp))
 
 	// Check if helper pod already exists before creating
 	existingPod, err := c.kubernetesClient.CoreV1().Pods(namespace).Get(context.Background(), helperPodName, metav1.GetOptions{})
@@ -2716,9 +2716,9 @@ func (c *Client) getKubeVirtConfig() (apiVersion string, timeout int, allowInsec
 // to avoid conflicts when multiple operations target the same VM
 func (c *Client) generateUniquePVCName(vmName string) string {
 	timestamp := time.Now().Unix()
-	// Generate a random 6-character suffix to further reduce collision probability
 	randomSuffix := fmt.Sprintf("%06d", rand.Intn(1000000))
-	return fmt.Sprintf("%s-bootiso-%d-%s", vmName, timestamp, randomSuffix)
+	name := fmt.Sprintf("%s-bootiso-%d-%s", vmName, timestamp, randomSuffix)
+	return sanitizeResourceName(name)
 }
 
 // isPVCUsable checks if a PVC is in a usable state for mounting

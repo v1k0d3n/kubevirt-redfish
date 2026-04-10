@@ -72,8 +72,24 @@ func resourceKey(gvr schema.GroupVersionResource, namespace string) string {
 	return fmt.Sprintf("%s/%s/%s/%s", gvr.Group, gvr.Version, gvr.Resource, namespace)
 }
 
-// addResource adds a resource to the mock client
+// maxNameLength is the Kubernetes limit for object names (DNS subdomain)
+const maxNameLength = 63
+
+// validateName returns an error if the object name exceeds the Kubernetes 63 character limit.
+func validateName(name string) error {
+	if len(name) > maxNameLength {
+		return fmt.Errorf("name %q is %d characters, exceeds the Kubernetes limit of %d", name, len(name), maxNameLength)
+	}
+	return nil
+}
+
+// addResource adds a resource to the mock client. It panics if the name exceeds 63 characters
+// so that tests catch name length violations immediately.
 func (m *MockDynamicClient) addResource(gvr schema.GroupVersionResource, namespace, name string, obj *unstructured.Unstructured) {
+	if err := validateName(name); err != nil {
+		panic(fmt.Sprintf("mock addResource: %v (resource: %s)", err, gvr.Resource))
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
