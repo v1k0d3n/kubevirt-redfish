@@ -92,6 +92,11 @@ type Client struct {
 	importWatcherCtx    context.Context
 	importWatcherCancel context.CancelFunc
 	importWatcherWg     sync.WaitGroup
+
+	// CDI PVC watcher management
+	pvcWatcherCtx    context.Context
+	pvcWatcherCancel context.CancelFunc
+	pvcWatcherWg     sync.WaitGroup
 }
 
 // init registers KubeVirt and CDI types with the runtime scheme for conversion
@@ -304,6 +309,7 @@ func (c *Client) GetPerformanceMetrics() map[string]interface{} {
 func (c *Client) Close() error {
 	c.stopBootOnceWatcher()
 	c.stopImportPodWatcher()
+	c.stopCDIPVCWatcher()
 
 	if c.httpClient != nil && c.httpClient.Transport != nil {
 		if transport, ok := c.httpClient.Transport.(*http.Transport); ok {
@@ -1846,11 +1852,16 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 		} else {
 			logger.Info("Created new VolumeImportSource %s for virtual media", volumeImportSourceName)
 		}
-		// Create PVC that references the VolumeImportSource with volume mode from CDI StorageProfile
+		// Create PVC that references the VolumeImportSource with volume mode from CDI StorageProfile.
+		// Label the PVC so the PVC watcher can map it back to the VM when it becomes Bound.
 		pvc := &corev1.PersistentVolumeClaim{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      dataVolumeName,
 				Namespace: namespace,
+				Labels: map[string]string{
+					ImportPodVMLabel:     name,
+					ImportPodVolumeLabel: deviceName,
+				},
 			},
 			Spec: corev1.PersistentVolumeClaimSpec{
 				DataSourceRef: &corev1.TypedObjectReference{
@@ -1879,6 +1890,13 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 			return err
 		}
 		logger.Info("VolumeImportSource and PVC created for HTTP import")
+
+		// Mark the VM as having a CDI import in progress so power-on is deferred
+		// until the PVC becomes Bound. The PVC watcher removes this label later.
+		if err := c.setImportingLabel(namespace, name, deviceName, CDIImportPrefix+dataVolumeName); err != nil {
+			logger.Error("Failed to set CDI importing label on VM %s/%s: %v", namespace, name, err)
+			return fmt.Errorf("failed to set CDI importing label: %w", err)
+		}
 		logger.Info("CDI will handle the ISO download and import")
 	}
 
@@ -1956,7 +1974,7 @@ func (c *Client) copyISOToPVC(namespace, dataVolumeName, imageURL, isoDownloadTi
 	} else {
 		logger.Info("PVC %s uses Filesystem volume mode, helper pod will download directly", pvcName)
 		container.Command = []string{"sh", "-c", fmt.Sprintf(
-			"curl --fail --show-error --insecure --connect-timeout 30 --max-time 1800 --location -o /mnt/iso/disk.img %s && [ -s /mnt/iso/disk.img ]",
+			"curl --fail --show-error --insecure --connect-timeout 30 --max-time 1800 --location -o /mnt/iso/disk.img %s && [ -s /mnt/iso/disk.img ] && sync /mnt/iso/disk.img",
 			imageURL)}
 		container.VolumeMounts = []corev1.VolumeMount{
 			{Name: "iso-volume", MountPath: "/mnt/iso"},
@@ -2808,6 +2826,7 @@ const (
 	PowerAfterImportLabel = "power-after-import.redfish"
 	ImportPodVMLabel      = "vm.redfish"
 	ImportPodVolumeLabel  = "volume.vm.redfish"
+	CDIImportPrefix       = "cdi-"
 )
 
 // BootOrderConfig represents the boot order configuration for a disk
@@ -3389,17 +3408,19 @@ func (c *Client) handleImportPodCompleted(pod *corev1.Pod) {
 		logger.Info("Import pod %s succeeded for VM %s/%s volume %s", pod.Name, vmNamespace, vmName, deviceName)
 	}
 
-	// Remove the importing label from the VM
-	if err := c.removeImportingLabel(vmNamespace, vmName, deviceName); err != nil {
-		logger.Error("Failed to remove importing label from VM %s/%s: %v", vmNamespace, vmName, err)
-	}
-
-	// Delete the completed pod
+	// Delete the completed pod first so the RWO volume is fully released before
+	// the importing label removal triggers a deferred power-on that would need
+	// to mount the same PVC from a potentially different node.
 	err = c.kubernetesClient.CoreV1().Pods(pod.Namespace).Delete(context.Background(), pod.Name, metav1.DeleteOptions{})
 	if err != nil {
 		logger.Warning("Failed to delete completed import pod %s: %v", pod.Name, err)
 	} else {
 		logger.Info("Deleted completed import pod %s", pod.Name)
+	}
+
+	// Remove the importing label from the VM — this may trigger handlePowerAfterImport
+	if err := c.removeImportingLabel(vmNamespace, vmName, deviceName); err != nil {
+		logger.Error("Failed to remove importing label from VM %s/%s: %v", vmNamespace, vmName, err)
 	}
 }
 
@@ -3446,6 +3467,178 @@ func (c *Client) reconcileExistingImportPods(namespace string) error {
 		pod := &podList.Items[i]
 		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
 			c.handleImportPodCompleted(pod)
+		}
+	}
+
+	return nil
+}
+
+// =============================================================================
+// CDI PVC WATCHER
+// =============================================================================
+
+// StartCDIPVCWatcher starts watching labeled PVCs for CDI import completion
+func (c *Client) StartCDIPVCWatcher(ctx context.Context, namespaces []string) {
+	if c.pvcWatcherCancel != nil {
+		logger.Warning("CDI PVC watcher already running, not starting another")
+		return
+	}
+
+	c.pvcWatcherCtx, c.pvcWatcherCancel = context.WithCancel(ctx)
+
+	logger.Info("Starting CDI PVC watcher for namespaces: %v", namespaces)
+
+	for _, namespace := range namespaces {
+		c.pvcWatcherWg.Add(1)
+		go func(ns string) {
+			defer c.pvcWatcherWg.Done()
+			c.runCDIPVCWatcher(c.pvcWatcherCtx, ns)
+		}(namespace)
+	}
+}
+
+func (c *Client) stopCDIPVCWatcher() {
+	if c.pvcWatcherCancel != nil {
+		logger.Info("Stopping CDI PVC watcher")
+		c.pvcWatcherCancel()
+		c.pvcWatcherWg.Wait()
+		c.pvcWatcherCancel = nil
+		logger.Info("CDI PVC watcher stopped")
+	}
+}
+
+func (c *Client) runCDIPVCWatcher(ctx context.Context, namespace string) {
+	logger.Info("Starting CDI PVC watcher for namespace: %s", namespace)
+
+	if err := c.reconcileExistingCDIPVCs(namespace); err != nil {
+		logger.Error("Failed to reconcile existing CDI PVCs in namespace %s: %v", namespace, err)
+	}
+
+	backoff := time.Second
+	maxBackoff := time.Minute
+
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Info("CDI PVC watcher for namespace %s shutting down", namespace)
+			return
+		default:
+		}
+
+		watcher, err := c.kubernetesClient.CoreV1().PersistentVolumeClaims(namespace).Watch(ctx, metav1.ListOptions{
+			LabelSelector: ImportPodVMLabel,
+		})
+		if err != nil {
+			logger.Error("Failed to create PVC watch for namespace %s: %v, retrying in %v", namespace, err, backoff)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+				backoff = min(backoff*2, maxBackoff)
+				continue
+			}
+		}
+
+		backoff = time.Second
+		logger.Info("CDI PVC watch for namespace %s created", namespace)
+
+		c.processCDIPVCEvents(ctx, namespace, watcher)
+
+		logger.Info("CDI PVC watch for namespace %s ended, reconnecting...", namespace)
+	}
+}
+
+func (c *Client) processCDIPVCEvents(ctx context.Context, namespace string, watcher watch.Interface) {
+	defer watcher.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok := <-watcher.ResultChan():
+			if !ok {
+				return
+			}
+
+			if event.Type != watch.Modified {
+				continue
+			}
+
+			pvc, ok := event.Object.(*corev1.PersistentVolumeClaim)
+			if !ok {
+				u, ok := event.Object.(*unstructured.Unstructured)
+				if !ok {
+					logger.Warning("Unexpected object type in CDI PVC watch event: %T", event.Object)
+					continue
+				}
+				p := &corev1.PersistentVolumeClaim{}
+				if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, p); err != nil {
+					logger.Error("Failed to convert unstructured to PVC: %v", err)
+					continue
+				}
+				pvc = p
+			}
+
+			if pvc.Status.Phase == corev1.ClaimBound {
+				c.handleCDIPVCBound(pvc)
+			}
+		}
+	}
+}
+
+// handleCDIPVCBound is called when a CDI-managed PVC becomes Bound, meaning
+// CDI finished populating it. The importing label is removed from the VM
+// which lets handlePowerAfterImport fire the deferred power command.
+func (c *Client) handleCDIPVCBound(pvc *corev1.PersistentVolumeClaim) {
+	labels := pvc.GetLabels()
+	vmName := labels[ImportPodVMLabel]
+	deviceName := labels[ImportPodVolumeLabel]
+
+	if vmName == "" || deviceName == "" {
+		return
+	}
+
+	namespace := pvc.Namespace
+
+	// Verify the importing label value starts with the CDI prefix so we
+	// don't accidentally clear a helper-pod-managed label.
+	vm, err := c.GetVM(namespace, vmName)
+	if err != nil {
+		logger.Warning("CDI PVC %s bound but VM %s/%s not found: %v", pvc.Name, namespace, vmName, err)
+		return
+	}
+
+	labelKey := ImportingLabelPrefix + deviceName
+	labelVal := vm.GetLabels()[labelKey]
+	if !strings.HasPrefix(labelVal, CDIImportPrefix) {
+		return
+	}
+
+	logger.Info("CDI PVC %s bound for VM %s/%s volume %s, removing importing label", pvc.Name, namespace, vmName, deviceName)
+	if err := c.removeImportingLabel(namespace, vmName, deviceName); err != nil {
+		logger.Error("Failed to remove CDI importing label from VM %s/%s: %v", namespace, vmName, err)
+	}
+}
+
+func (c *Client) reconcileExistingCDIPVCs(namespace string) error {
+	logger.Info("Reconciling existing CDI PVCs in namespace %s", namespace)
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+	defer cancel()
+
+	pvcList, err := c.kubernetesClient.CoreV1().PersistentVolumeClaims(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: ImportPodVMLabel,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to list CDI PVCs: %w", err)
+	}
+
+	logger.Info("Found %d labeled PVCs in namespace %s", len(pvcList.Items), namespace)
+
+	for i := range pvcList.Items {
+		pvc := &pvcList.Items[i]
+		if pvc.Status.Phase == corev1.ClaimBound {
+			c.handleCDIPVCBound(pvc)
 		}
 	}
 

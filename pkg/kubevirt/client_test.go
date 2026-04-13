@@ -3525,6 +3525,21 @@ func TestInsertVirtualMediaAsync_HTTPFlow(t *testing.T) {
 			if !foundVolume {
 				t.Error("Expected cdrom0 volume to be added to VM")
 			}
+
+			// CDI path must set importing label so power-on is deferred
+			labelKey := ImportingLabelPrefix + "cdrom0"
+			labelVal := updatedVM.GetLabels()[labelKey]
+			if !strings.HasPrefix(labelVal, CDIImportPrefix) {
+				t.Errorf("Expected importing label %s to start with %q, got %q", labelKey, CDIImportPrefix, labelVal)
+			}
+
+			// Verify PVC carries the VM tracking labels
+			for _, pvc := range pvcList.Items {
+				if pvc.Labels[ImportPodVMLabel] == "test-vm" && pvc.Labels[ImportPodVolumeLabel] == "cdrom0" {
+					return // found
+				}
+			}
+			t.Error("Expected CDI PVC to carry vm.redfish and volume.vm.redfish labels")
 		})
 	}
 }
@@ -3618,6 +3633,13 @@ func TestInsertVirtualMediaAsync_HTTPSFlow(t *testing.T) {
 			}
 			if !foundDisk {
 				t.Error("Expected cdrom0 disk to be added to VM")
+			}
+
+			// CDI path must set importing label (HTTPS without insecure also uses CDI)
+			labelKey := ImportingLabelPrefix + "cdrom0"
+			labelVal := updatedVM.GetLabels()[labelKey]
+			if !strings.HasPrefix(labelVal, CDIImportPrefix) {
+				t.Errorf("Expected importing label %s to start with %q, got %q", labelKey, CDIImportPrefix, labelVal)
 			}
 		})
 	}
@@ -3723,5 +3745,143 @@ func TestInsertVirtualMediaAsync_InsecureHTTPSFlow(t *testing.T) {
 				t.Error("Expected cdrom0 disk to be added to VM")
 			}
 		})
+	}
+}
+
+func TestHandleCDIPVCBound_RemovesImportingLabel(t *testing.T) {
+	mockDynamic := NewMockDynamicClient()
+	fakeK8s := fake.NewSimpleClientset()
+
+	vm := newTestVM("test-ns", "test-vm", map[string]string{
+		ImportingLabelPrefix + "cdrom0": CDIImportPrefix + "test-pvc",
+		PowerAfterImportLabel:           "On",
+	}, nil)
+	mockDynamic.AddVM(vm)
+
+	client := NewClientWithClients(fakeK8s, mockDynamic, 30*time.Second, nil)
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pvc",
+			Namespace: "test-ns",
+			Labels: map[string]string{
+				ImportPodVMLabel:     "test-vm",
+				ImportPodVolumeLabel: "cdrom0",
+			},
+		},
+		Status: corev1.PersistentVolumeClaimStatus{
+			Phase: corev1.ClaimBound,
+		},
+	}
+
+	client.handleCDIPVCBound(pvc)
+
+	updated, err := mockDynamic.GetVM("test-ns", "test-vm")
+	if err != nil {
+		t.Fatalf("Failed to get VM: %v", err)
+	}
+
+	if _, found := updated.GetLabels()[ImportingLabelPrefix+"cdrom0"]; found {
+		t.Error("Expected importing label to be removed after PVC became Bound")
+	}
+}
+
+func TestHandleCDIPVCBound_IgnoresNonCDILabel(t *testing.T) {
+	mockDynamic := NewMockDynamicClient()
+	fakeK8s := fake.NewSimpleClientset()
+
+	// importing label has a pod name, not the CDI prefix
+	vm := newTestVM("test-ns", "test-vm", map[string]string{
+		ImportingLabelPrefix + "cdrom0": "copy-iso-pod-123",
+	}, nil)
+	mockDynamic.AddVM(vm)
+
+	client := NewClientWithClients(fakeK8s, mockDynamic, 30*time.Second, nil)
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pvc",
+			Namespace: "test-ns",
+			Labels: map[string]string{
+				ImportPodVMLabel:     "test-vm",
+				ImportPodVolumeLabel: "cdrom0",
+			},
+		},
+		Status: corev1.PersistentVolumeClaimStatus{
+			Phase: corev1.ClaimBound,
+		},
+	}
+
+	client.handleCDIPVCBound(pvc)
+
+	updated, err := mockDynamic.GetVM("test-ns", "test-vm")
+	if err != nil {
+		t.Fatalf("Failed to get VM: %v", err)
+	}
+
+	labelVal := updated.GetLabels()[ImportingLabelPrefix+"cdrom0"]
+	if labelVal != "copy-iso-pod-123" {
+		t.Errorf("Expected helper-pod importing label to be preserved, got %q", labelVal)
+	}
+}
+
+func TestCDIImportDetectedByIsImportInProgress(t *testing.T) {
+	mockDynamic := NewMockDynamicClient()
+	fakeK8s := fake.NewSimpleClientset()
+
+	vm := newTestVM("test-ns", "test-vm", map[string]string{
+		ImportingLabelPrefix + "cdrom0": CDIImportPrefix + "test-pvc",
+	}, nil)
+	mockDynamic.AddVM(vm)
+
+	client := NewClientWithClients(fakeK8s, mockDynamic, 30*time.Second, nil)
+
+	importing, err := client.IsImportInProgress("test-ns", "test-vm")
+	if err != nil {
+		t.Fatalf("IsImportInProgress failed: %v", err)
+	}
+	if !importing {
+		t.Error("Expected IsImportInProgress to return true for CDI import label")
+	}
+}
+
+func TestReconcileExistingCDIPVCs(t *testing.T) {
+	mockDynamic := NewMockDynamicClient()
+
+	boundPVC := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pvc",
+			Namespace: "test-ns",
+			Labels: map[string]string{
+				ImportPodVMLabel:     "test-vm",
+				ImportPodVolumeLabel: "cdrom0",
+			},
+		},
+		Status: corev1.PersistentVolumeClaimStatus{
+			Phase: corev1.ClaimBound,
+		},
+	}
+	fakeK8s := fake.NewSimpleClientset(boundPVC)
+
+	vm := newTestVM("test-ns", "test-vm", map[string]string{
+		ImportingLabelPrefix + "cdrom0": CDIImportPrefix + "test-pvc",
+		PowerAfterImportLabel:           "On",
+	}, nil)
+	mockDynamic.AddVM(vm)
+
+	client := NewClientWithClients(fakeK8s, mockDynamic, 30*time.Second, nil)
+
+	err := client.reconcileExistingCDIPVCs("test-ns")
+	if err != nil {
+		t.Fatalf("reconcileExistingCDIPVCs failed: %v", err)
+	}
+
+	updated, err := mockDynamic.GetVM("test-ns", "test-vm")
+	if err != nil {
+		t.Fatalf("Failed to get VM: %v", err)
+	}
+
+	if _, found := updated.GetLabels()[ImportingLabelPrefix+"cdrom0"]; found {
+		t.Error("Expected importing label to be removed after reconciliation of Bound PVC")
 	}
 }

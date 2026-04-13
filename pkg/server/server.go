@@ -228,6 +228,7 @@ func (s *Server) Start() error {
 		if len(namespaces) > 0 {
 			s.kubevirtClient.StartBootOnceWatcher(context.Background(), namespaces)
 			s.kubevirtClient.StartImportPodWatcher(context.Background(), namespaces)
+			s.kubevirtClient.StartCDIPVCWatcher(context.Background(), namespaces)
 		}
 	}
 
