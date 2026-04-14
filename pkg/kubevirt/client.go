@@ -3603,9 +3603,18 @@ func (c *Client) processCDIPVCEvents(ctx context.Context, namespace string, watc
 	}
 }
 
-// handleCDIPVCBound is called when a CDI-managed PVC becomes Bound, meaning
-// CDI finished populating it. The importing label is removed from the VM
-// which lets handlePowerAfterImport fire the deferred power command.
+// handleCDIPVCBound is called when a CDI-managed PVC becomes Bound.
+//
+// CDI's volume populator creates a "prime" PVC that inherits our labels.
+// The prime PVC becomes Bound early (before CDI finishes rebinding the PV
+// to the original PVC), so we verify the PVC name matches the one stored
+// in the importing label ("cdi-<pvcname>") to filter out prime PVCs.
+//
+// For volume-populator PVCs the Bound status on the original PVC is a
+// reliable completion signal: the storage provisioner defers to CDI
+// ("Assuming an external populator will provision the volume") and CDI
+// only rebinds the PV after the import finishes. Note that CDI does NOT
+// clear DataSourceRef after population — it stays on the PVC permanently.
 func (c *Client) handleCDIPVCBound(pvc *corev1.PersistentVolumeClaim) {
 	labels := pvc.GetLabels()
 	vmName := labels[ImportPodVMLabel]
@@ -3617,8 +3626,6 @@ func (c *Client) handleCDIPVCBound(pvc *corev1.PersistentVolumeClaim) {
 
 	namespace := pvc.Namespace
 
-	// Verify the importing label value starts with the CDI prefix so we
-	// don't accidentally clear a helper-pod-managed label.
 	vm, err := c.GetVM(namespace, vmName)
 	if err != nil {
 		logger.Warning("CDI PVC %s bound but VM %s/%s not found: %v", pvc.Name, namespace, vmName, err)
@@ -3631,7 +3638,17 @@ func (c *Client) handleCDIPVCBound(pvc *corev1.PersistentVolumeClaim) {
 		return
 	}
 
-	logger.Info("CDI PVC %s bound for VM %s/%s volume %s, removing importing label", pvc.Name, namespace, vmName, deviceName)
+	// Verify this is our original PVC, not a CDI prime PVC. CDI copies
+	// labels to the prime PVC it creates internally. The prime PVC becomes
+	// Bound before CDI rebinds the PV to the original, so reacting to it
+	// would prematurely clear the importing label.
+	expectedPVCName := strings.TrimPrefix(labelVal, CDIImportPrefix)
+	if pvc.Name != expectedPVCName {
+		logger.Debug("Ignoring PVC %s — expected %s for VM %s/%s volume %s (likely a CDI prime PVC)", pvc.Name, expectedPVCName, namespace, vmName, deviceName)
+		return
+	}
+
+	logger.Info("CDI PVC %s populated and bound for VM %s/%s volume %s, removing importing label", pvc.Name, namespace, vmName, deviceName)
 	if err := c.removeImportingLabel(namespace, vmName, deviceName); err != nil {
 		logger.Error("Failed to remove CDI importing label from VM %s/%s: %v", namespace, vmName, err)
 	}

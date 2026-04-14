@@ -3786,6 +3786,54 @@ func TestHandleCDIPVCBound_RemovesImportingLabel(t *testing.T) {
 	}
 }
 
+func TestHandleCDIPVCBound_WorksWithDataSourceRefPresent(t *testing.T) {
+	mockDynamic := NewMockDynamicClient()
+	fakeK8s := fake.NewSimpleClientset()
+
+	vm := newTestVM("test-ns", "test-vm", map[string]string{
+		ImportingLabelPrefix + "cdrom0": CDIImportPrefix + "test-pvc",
+		PowerAfterImportLabel:           "On",
+	}, nil)
+	mockDynamic.AddVM(vm)
+
+	client := NewClientWithClients(fakeK8s, mockDynamic, 30*time.Second, nil)
+
+	// CDI does NOT clear DataSourceRef after population — it stays on
+	// the PVC permanently. The Bound status on the original PVC is the
+	// reliable completion signal for volume-populator PVCs.
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pvc",
+			Namespace: "test-ns",
+			Labels: map[string]string{
+				ImportPodVMLabel:     "test-vm",
+				ImportPodVolumeLabel: "cdrom0",
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			DataSourceRef: &corev1.TypedObjectReference{
+				APIGroup: stringPtr("cdi.kubevirt.io"),
+				Kind:     "VolumeImportSource",
+				Name:     "test-populator",
+			},
+		},
+		Status: corev1.PersistentVolumeClaimStatus{
+			Phase: corev1.ClaimBound,
+		},
+	}
+
+	client.handleCDIPVCBound(pvc)
+
+	updated, err := mockDynamic.GetVM("test-ns", "test-vm")
+	if err != nil {
+		t.Fatalf("Failed to get VM: %v", err)
+	}
+
+	if _, found := updated.GetLabels()[ImportingLabelPrefix+"cdrom0"]; found {
+		t.Error("Importing label should be removed — Bound original PVC with DataSourceRef means CDI completed (DataSourceRef is never cleared)")
+	}
+}
+
 func TestHandleCDIPVCBound_IgnoresNonCDILabel(t *testing.T) {
 	mockDynamic := NewMockDynamicClient()
 	fakeK8s := fake.NewSimpleClientset()
@@ -3822,6 +3870,45 @@ func TestHandleCDIPVCBound_IgnoresNonCDILabel(t *testing.T) {
 	labelVal := updated.GetLabels()[ImportingLabelPrefix+"cdrom0"]
 	if labelVal != "copy-iso-pod-123" {
 		t.Errorf("Expected helper-pod importing label to be preserved, got %q", labelVal)
+	}
+}
+
+func TestHandleCDIPVCBound_IgnoresPrimePVC(t *testing.T) {
+	mockDynamic := NewMockDynamicClient()
+	fakeK8s := fake.NewSimpleClientset()
+
+	vm := newTestVM("test-ns", "test-vm", map[string]string{
+		ImportingLabelPrefix + "cdrom0": CDIImportPrefix + "test-pvc",
+		PowerAfterImportLabel:           "On",
+	}, nil)
+	mockDynamic.AddVM(vm)
+
+	client := NewClientWithClients(fakeK8s, mockDynamic, 30*time.Second, nil)
+
+	// CDI prime PVC inherits our labels but has a different name
+	primePVC := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "prime-5f2ddb7b-7191-4260-a3fb-bf0f0f91def5",
+			Namespace: "test-ns",
+			Labels: map[string]string{
+				ImportPodVMLabel:     "test-vm",
+				ImportPodVolumeLabel: "cdrom0",
+			},
+		},
+		Status: corev1.PersistentVolumeClaimStatus{
+			Phase: corev1.ClaimBound,
+		},
+	}
+
+	client.handleCDIPVCBound(primePVC)
+
+	updated, err := mockDynamic.GetVM("test-ns", "test-vm")
+	if err != nil {
+		t.Fatalf("Failed to get VM: %v", err)
+	}
+
+	if _, found := updated.GetLabels()[ImportingLabelPrefix+"cdrom0"]; !found {
+		t.Error("Importing label should NOT be removed when a CDI prime PVC becomes Bound — must wait for original PVC")
 	}
 }
 
