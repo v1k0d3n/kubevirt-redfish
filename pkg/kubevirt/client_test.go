@@ -3885,3 +3885,127 @@ func TestReconcileExistingCDIPVCs(t *testing.T) {
 		t.Error("Expected importing label to be removed after reconciliation of Bound PVC")
 	}
 }
+
+func TestIsCDIManagedPod(t *testing.T) {
+	tests := []struct {
+		name   string
+		labels map[string]string
+		want   bool
+	}{
+		{
+			name:   "CDI importer pod",
+			labels: map[string]string{CDIManagedLabel: "importer", ImportPodVMLabel: "vm-1"},
+			want:   true,
+		},
+		{
+			name:   "our helper pod",
+			labels: map[string]string{ImportPodVMLabel: "vm-1", ImportPodVolumeLabel: "cdrom0"},
+			want:   false,
+		},
+		{
+			name:   "no labels",
+			labels: nil,
+			want:   false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Labels: tt.labels}}
+			if got := isCDIManagedPod(pod); got != tt.want {
+				t.Errorf("isCDIManagedPod() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHandleImportPodCompleted_SkipsCDIPod(t *testing.T) {
+	mockDynamic := NewMockDynamicClient()
+
+	// CDI importer pod with both CDI and our labels (CDI copies PVC labels)
+	cdiPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "importer-prime-abc123",
+			Namespace: "test-ns",
+			Labels: map[string]string{
+				CDIManagedLabel:      "importer",
+				ImportPodVMLabel:     "test-vm",
+				ImportPodVolumeLabel: "cdrom0",
+			},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodFailed},
+	}
+	fakeK8s := fake.NewSimpleClientset(cdiPod)
+
+	vm := newTestVM("test-ns", "test-vm", map[string]string{
+		ImportingLabelPrefix + "cdrom0": CDIImportPrefix + "test-pvc",
+	}, nil)
+	mockDynamic.AddVM(vm)
+
+	client := NewClientWithClients(fakeK8s, mockDynamic, 30*time.Second, nil)
+
+	// Reconcile should skip the CDI pod
+	err := client.reconcileExistingImportPods("test-ns")
+	if err != nil {
+		t.Fatalf("reconcileExistingImportPods failed: %v", err)
+	}
+
+	// The CDI pod must still exist (not deleted)
+	_, err = fakeK8s.CoreV1().Pods("test-ns").Get(context.Background(), "importer-prime-abc123", metav1.GetOptions{})
+	if err != nil {
+		t.Errorf("CDI pod should not have been deleted, but got: %v", err)
+	}
+
+	// The importing label must still be on the VM (not removed)
+	updated, err := mockDynamic.GetVM("test-ns", "test-vm")
+	if err != nil {
+		t.Fatalf("Failed to get VM: %v", err)
+	}
+	if _, found := updated.GetLabels()[ImportingLabelPrefix+"cdrom0"]; !found {
+		t.Error("CDI importing label should NOT have been removed — that is the CDI PVC watcher's job")
+	}
+}
+
+func TestHandleImportPodCompleted_ProcessesOurHelperPod(t *testing.T) {
+	mockDynamic := NewMockDynamicClient()
+
+	// Our helper pod (no CDI label)
+	helperPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "copy-iso-test-pvc-12345",
+			Namespace: "test-ns",
+			Labels: map[string]string{
+				ImportPodVMLabel:     "test-vm",
+				ImportPodVolumeLabel: "cdrom0",
+			},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodSucceeded},
+	}
+	fakeK8s := fake.NewSimpleClientset(helperPod)
+
+	vm := newTestVM("test-ns", "test-vm", map[string]string{
+		ImportingLabelPrefix + "cdrom0": "copy-iso-test-pvc-12345",
+	}, nil)
+	mockDynamic.AddVM(vm)
+
+	client := NewClientWithClients(fakeK8s, mockDynamic, 30*time.Second, nil)
+
+	err := client.reconcileExistingImportPods("test-ns")
+	if err != nil {
+		t.Fatalf("reconcileExistingImportPods failed: %v", err)
+	}
+
+	// The helper pod should be deleted
+	_, err = fakeK8s.CoreV1().Pods("test-ns").Get(context.Background(), "copy-iso-test-pvc-12345", metav1.GetOptions{})
+	if err == nil {
+		t.Error("Helper pod should have been deleted after completion")
+	}
+
+	// The importing label should be removed
+	updated, err := mockDynamic.GetVM("test-ns", "test-vm")
+	if err != nil {
+		t.Fatalf("Failed to get VM: %v", err)
+	}
+	if _, found := updated.GetLabels()[ImportingLabelPrefix+"cdrom0"]; found {
+		t.Error("Importing label should have been removed for completed helper pod")
+	}
+}

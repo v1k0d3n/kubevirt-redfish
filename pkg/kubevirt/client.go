@@ -2827,7 +2827,17 @@ const (
 	ImportPodVMLabel      = "vm.redfish"
 	ImportPodVolumeLabel  = "volume.vm.redfish"
 	CDIImportPrefix       = "cdi-"
+	CDIManagedLabel       = "cdi.kubevirt.io"
 )
+
+// isCDIManagedPod returns true when the pod was created by CDI (e.g. the
+// importer-prime pod for volume population). Our import pod watcher must
+// never delete or otherwise interfere with these pods — CDI manages their
+// lifecycle and has its own retry logic (restartPolicy: OnFailure).
+func isCDIManagedPod(pod *corev1.Pod) bool {
+	_, hasCDI := pod.GetLabels()[CDIManagedLabel]
+	return hasCDI
+}
 
 // BootOrderConfig represents the boot order configuration for a disk
 type BootOrderConfig struct {
@@ -3370,6 +3380,10 @@ func (c *Client) processImportPodEvents(ctx context.Context, namespace string, w
 				pod = p
 			}
 
+			if isCDIManagedPod(pod) {
+				continue
+			}
+
 			if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
 				c.handleImportPodCompleted(pod)
 			}
@@ -3465,6 +3479,9 @@ func (c *Client) reconcileExistingImportPods(namespace string) error {
 
 	for i := range podList.Items {
 		pod := &podList.Items[i]
+		if isCDIManagedPod(pod) {
+			continue
+		}
 		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
 			c.handleImportPodCompleted(pod)
 		}
