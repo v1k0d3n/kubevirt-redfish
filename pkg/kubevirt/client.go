@@ -1784,12 +1784,24 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 		}
 	}
 
-	// Now create the PVC and import the ISO
-	if allowInsecureTLS && u.Scheme == "https" {
-		logger.Info("Using helper pod for ISO import due to allowInsecureTLS=true and HTTPS URL")
-		logger.Debug("Using helper pod approach for HTTPS URL with allowInsecureTLS=true")
+	// Determine volume mode before choosing the import strategy.
+	// CDI's volume populator (VolumeImportSource) is only used for Block storage
+	// because its prime-PVC mechanism can stall with WaitForFirstConsumer
+	// provisioners. Filesystem storage (including the default when no storage
+	// class is configured) always uses a helper pod which directly mounts the
+	// PVC and triggers provisioning reliably.
+	volumeMode := c.getStorageProfileVolumeMode(storageClass)
+	isBlockMode := volumeMode != nil && *volumeMode == corev1.PersistentVolumeBlock
+	useHelperPod := (allowInsecureTLS && u.Scheme == "https") || !isBlockMode
 
-		// Create blank PVC for ISO files with volume mode from CDI StorageProfile
+	if useHelperPod {
+		reason := "Filesystem volume mode"
+		if allowInsecureTLS && u.Scheme == "https" {
+			reason = "allowInsecureTLS=true with HTTPS URL"
+		}
+		logger.Info("Using helper pod for ISO import (%s)", reason)
+
+		// Create blank PVC for ISO files
 		pvc := &corev1.PersistentVolumeClaim{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      dataVolumeName,
@@ -1810,11 +1822,9 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 			pvc.Spec.StorageClassName = &storageClass
 			logger.Info("Set storage class %s for PVC %s", storageClass, dataVolumeName)
 		}
-		if volumeMode := c.getStorageProfileVolumeMode(storageClass); volumeMode != nil {
+		if volumeMode != nil {
 			pvc.Spec.VolumeMode = volumeMode
 		}
-
-		logger.Debug("Creating PVC %s in namespace %s", dataVolumeName, namespace)
 
 		if err := c.ensurePVC(ctx, namespace, pvc); err != nil {
 			return err
@@ -1827,13 +1837,9 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 		}
 		logger.Info("Helper pod created for ISO import to PVC %s", dataVolumeName)
 	} else {
-		logger.Debug("Using CDI HTTP import approach for URL scheme %s", u.Scheme)
-		// CDI HTTP import for HTTP or valid HTTPS
-		logger.Info("Using CDI HTTP import for ISO")
+		logger.Info("Using CDI HTTP import for ISO (Block volume mode)")
 		volumeImportSourceName := sanitizeResourceName(fmt.Sprintf("%s-populator", dataVolumeName))
-		logger.Debug("Generated volumeImportSourceName=%s", volumeImportSourceName)
 
-		// Create typed VolumeImportSource
 		volumeImportSource := &cdiv1beta1.VolumeImportSource{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      volumeImportSourceName,
@@ -1848,7 +1854,6 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 			},
 		}
 
-		// Convert to unstructured for dynamic client
 		visUnstructured, err := volumeImportSourceToUnstructured(volumeImportSource)
 		if err != nil {
 			return fmt.Errorf("failed to convert VolumeImportSource to unstructured: %w", err)
@@ -1869,7 +1874,6 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 		} else {
 			logger.Info("Created new VolumeImportSource %s for virtual media", volumeImportSourceName)
 		}
-		// Create PVC that references the VolumeImportSource with volume mode from CDI StorageProfile.
 		// Label the PVC so the PVC watcher can map it back to the VM when it becomes Bound.
 		pvc := &corev1.PersistentVolumeClaim{
 			ObjectMeta: metav1.ObjectMeta{
@@ -1900,9 +1904,7 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 			pvc.Spec.StorageClassName = &storageClass
 			logger.Info("Set storage class %s for PVC %s", storageClass, dataVolumeName)
 		}
-		if volumeMode := c.getStorageProfileVolumeMode(storageClass); volumeMode != nil {
-			pvc.Spec.VolumeMode = volumeMode
-		}
+		pvc.Spec.VolumeMode = volumeMode
 		if err := c.ensurePVC(ctx, namespace, pvc); err != nil {
 			return err
 		}

@@ -3374,7 +3374,30 @@ func TestEnsurePVC(t *testing.T) {
 
 // setupInsertVirtualMediaTest creates the common mock objects for insertVirtualMediaAsync tests.
 // It returns the client and mock dynamic client. The VM is pre-configured in the mock.
+// With no storage class configured the default volume mode is Filesystem, which routes
+// to the helper pod path. Use setupInsertVirtualMediaTestBlock for CDI path tests.
 func setupInsertVirtualMediaTest(t *testing.T, allowInsecureTLS bool, existingPVCs ...corev1.PersistentVolumeClaim) (*Client, *MockDynamicClient, *fake.Clientset) {
+	t.Helper()
+	return setupInsertVirtualMediaTestWithStorageClass(t, allowInsecureTLS, "", nil, existingPVCs...)
+}
+
+// setupInsertVirtualMediaTestBlock creates test fixtures with a Block storage class
+// and matching CDI StorageProfile so the CDI VolumeImportSource path is exercised.
+func setupInsertVirtualMediaTestBlock(t *testing.T, allowInsecureTLS bool, existingPVCs ...corev1.PersistentVolumeClaim) (*Client, *MockDynamicClient, *fake.Clientset) {
+	t.Helper()
+	block := corev1.PersistentVolumeBlock
+	sp := &cdiv1beta1.StorageProfile{
+		ObjectMeta: metav1.ObjectMeta{Name: "block-storage"},
+		Status: cdiv1beta1.StorageProfileStatus{
+			ClaimPropertySets: []cdiv1beta1.ClaimPropertySet{
+				{VolumeMode: &block},
+			},
+		},
+	}
+	return setupInsertVirtualMediaTestWithStorageClass(t, allowInsecureTLS, "block-storage", sp, existingPVCs...)
+}
+
+func setupInsertVirtualMediaTestWithStorageClass(t *testing.T, allowInsecureTLS bool, storageClass string, sp *cdiv1beta1.StorageProfile, existingPVCs ...corev1.PersistentVolumeClaim) (*Client, *MockDynamicClient, *fake.Clientset) {
 	t.Helper()
 
 	var objs []runtime.Object
@@ -3387,10 +3410,16 @@ func setupInsertVirtualMediaTest(t *testing.T, allowInsecureTLS bool, existingPV
 	mockConfig := &MockConfig{}
 	mockConfig.dataVolumeConfig.storageSize = "10Gi"
 	mockConfig.dataVolumeConfig.allowInsecureTLS = allowInsecureTLS
-	mockConfig.dataVolumeConfig.storageClass = ""
+	mockConfig.dataVolumeConfig.storageClass = storageClass
 	mockConfig.dataVolumeConfig.vmUpdateTimeout = "30s"
 	mockConfig.dataVolumeConfig.isoDownloadTimeout = "30m"
 	mockConfig.dataVolumeConfig.helperImage = "alpine:latest"
+
+	if sp != nil {
+		if err := mockDynamicClient.AddStorageProfile(sp); err != nil {
+			t.Fatalf("Failed to add StorageProfile: %v", err)
+		}
+	}
 
 	vm := &kubevirtv1.VirtualMachine{
 		ObjectMeta: metav1.ObjectMeta{
@@ -3415,135 +3444,132 @@ func setupInsertVirtualMediaTest(t *testing.T, allowInsecureTLS bool, existingPV
 	return client, mockDynamicClient, fakeK8sClient
 }
 
-func TestInsertVirtualMediaAsync_HTTPFlow(t *testing.T) {
-	tests := []struct {
-		name        string
-		existingPVC *corev1.PersistentVolumeClaim
-		wantReuse   bool
-	}{
-		{
-			name:      "HTTP with no existing PVC creates new PVC and VolumeImportSource",
-			wantReuse: false,
-		},
-		{
-			name: "HTTP with existing Bound PVC reuses it",
-			existingPVC: &corev1.PersistentVolumeClaim{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "override-pvc",
-					Namespace: "test-ns",
-				},
-				Spec: corev1.PersistentVolumeClaimSpec{
-					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-					Resources: corev1.VolumeResourceRequirements{
-						Requests: corev1.ResourceList{
-							"storage": resource.MustParse("10Gi"),
-						},
-					},
-				},
-				Status: corev1.PersistentVolumeClaimStatus{
-					Phase: corev1.ClaimBound,
-				},
-			},
-			wantReuse: true,
-		},
-		{
-			name: "HTTP with existing Lost PVC deletes and recreates",
-			existingPVC: &corev1.PersistentVolumeClaim{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "override-pvc",
-					Namespace: "test-ns",
-				},
-				Spec: corev1.PersistentVolumeClaimSpec{
-					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-					Resources: corev1.VolumeResourceRequirements{
-						Requests: corev1.ResourceList{
-							"storage": resource.MustParse("10Gi"),
-						},
-					},
-				},
-				Status: corev1.PersistentVolumeClaimStatus{
-					Phase: corev1.ClaimLost,
-				},
-			},
-			wantReuse: false,
-		},
+func TestInsertVirtualMediaAsync_FilesystemUsesHelperPod(t *testing.T) {
+	// Default setup has no storage class → Filesystem → helper pod path
+	client, _, fakeK8s := setupInsertVirtualMediaTest(t, false)
+
+	err := client.insertVirtualMediaAsync("test-ns", "test-vm", "cdrom0", "http://example.com/image.iso")
+	if err != nil {
+		t.Fatalf("insertVirtualMediaAsync failed: %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var pvcs []corev1.PersistentVolumeClaim
-			if tt.existingPVC != nil {
-				pvcs = append(pvcs, *tt.existingPVC)
-			}
-			client, _, fakeK8s := setupInsertVirtualMediaTest(t, false, pvcs...)
-
-			// HTTP flow: allowInsecureTLS=false, scheme=http -> CDI path
-			err := client.insertVirtualMediaAsync("test-ns", "test-vm", "cdrom0", "http://example.com/image.iso")
-			if err != nil {
-				t.Fatalf("insertVirtualMediaAsync failed: %v", err)
-			}
-
-			// Verify that exactly one PVC was created (the generated unique name)
-			pvcList, err := fakeK8s.CoreV1().PersistentVolumeClaims("test-ns").List(context.Background(), metav1.ListOptions{})
-			if err != nil {
-				t.Fatalf("Failed to list PVCs: %v", err)
-			}
-
-			if tt.existingPVC != nil && tt.wantReuse {
-				// Existing usable PVC + the new generated one
-				if len(pvcList.Items) < 1 {
-					t.Error("Expected at least one PVC to exist")
-				}
-			} else {
-				if len(pvcList.Items) < 1 {
-					t.Error("Expected at least one PVC to be created")
-				}
-			}
-
-			// Verify VM was updated with cdrom0 disk and volume
-			updatedVM, err := client.GetVM("test-ns", "test-vm")
-			if err != nil {
-				t.Fatalf("Failed to get VM: %v", err)
-			}
-
-			foundDisk := false
-			for _, disk := range updatedVM.Spec.Template.Spec.Domain.Devices.Disks {
-				if disk.Name == "cdrom0" && disk.CDRom != nil {
-					foundDisk = true
-					break
-				}
-			}
-			if !foundDisk {
-				t.Error("Expected cdrom0 disk to be added to VM")
-			}
-
-			foundVolume := false
-			for _, vol := range updatedVM.Spec.Template.Spec.Volumes {
-				if vol.Name == "cdrom0" && vol.PersistentVolumeClaim != nil {
-					foundVolume = true
-					break
-				}
-			}
-			if !foundVolume {
-				t.Error("Expected cdrom0 volume to be added to VM")
-			}
-
-			// CDI path must set importing label so power-on is deferred
-			labelKey := ImportingLabelPrefix + "cdrom0"
-			labelVal := updatedVM.GetLabels()[labelKey]
-			if !strings.HasPrefix(labelVal, CDIImportPrefix) {
-				t.Errorf("Expected importing label %s to start with %q, got %q", labelKey, CDIImportPrefix, labelVal)
-			}
-
-			// Verify PVC carries the VM tracking labels
-			for _, pvc := range pvcList.Items {
-				if pvc.Labels[ImportPodVMLabel] == "test-vm" && pvc.Labels[ImportPodVolumeLabel] == "cdrom0" {
-					return // found
-				}
-			}
-			t.Error("Expected CDI PVC to carry vm.redfish and volume.vm.redfish labels")
-		})
+	pvcList, err := fakeK8s.CoreV1().PersistentVolumeClaims("test-ns").List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("Failed to list PVCs: %v", err)
 	}
+	if len(pvcList.Items) < 1 {
+		t.Fatal("Expected at least one PVC to be created")
+	}
+
+	// PVC must NOT have DataSourceRef (helper pod path creates a blank PVC)
+	for _, pvc := range pvcList.Items {
+		if pvc.Spec.DataSourceRef != nil {
+			t.Error("Filesystem PVC should not have DataSourceRef — helper pod path expected")
+		}
+	}
+
+	// Helper pod must be created
+	podList, err := fakeK8s.CoreV1().Pods("test-ns").List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("Failed to list pods: %v", err)
+	}
+	if len(podList.Items) < 1 {
+		t.Error("Expected helper pod to be created for Filesystem storage")
+	}
+
+	updatedVM, err := client.GetVM("test-ns", "test-vm")
+	if err != nil {
+		t.Fatalf("Failed to get VM: %v", err)
+	}
+
+	foundDisk := false
+	for _, disk := range updatedVM.Spec.Template.Spec.Domain.Devices.Disks {
+		if disk.Name == "cdrom0" && disk.CDRom != nil {
+			foundDisk = true
+			break
+		}
+	}
+	if !foundDisk {
+		t.Error("Expected cdrom0 disk to be added to VM")
+	}
+
+	// Helper pod path sets importing label with the pod name (no CDI prefix)
+	labelKey := ImportingLabelPrefix + "cdrom0"
+	labelVal := updatedVM.GetLabels()[labelKey]
+	if labelVal == "" {
+		t.Errorf("Expected importing label %s to be set", labelKey)
+	}
+	if strings.HasPrefix(labelVal, CDIImportPrefix) {
+		t.Errorf("Filesystem path should use helper pod importing label (no CDI prefix), got %q", labelVal)
+	}
+}
+
+func TestInsertVirtualMediaAsync_BlockUsesCDI(t *testing.T) {
+	// Block storage class → CDI VolumeImportSource path
+	client, _, fakeK8s := setupInsertVirtualMediaTestBlock(t, false)
+
+	err := client.insertVirtualMediaAsync("test-ns", "test-vm", "cdrom0", "http://example.com/image.iso")
+	if err != nil {
+		t.Fatalf("insertVirtualMediaAsync failed: %v", err)
+	}
+
+	pvcList, err := fakeK8s.CoreV1().PersistentVolumeClaims("test-ns").List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("Failed to list PVCs: %v", err)
+	}
+	if len(pvcList.Items) < 1 {
+		t.Fatal("Expected at least one PVC to be created")
+	}
+
+	updatedVM, err := client.GetVM("test-ns", "test-vm")
+	if err != nil {
+		t.Fatalf("Failed to get VM: %v", err)
+	}
+
+	foundDisk := false
+	for _, disk := range updatedVM.Spec.Template.Spec.Domain.Devices.Disks {
+		if disk.Name == "cdrom0" && disk.CDRom != nil {
+			foundDisk = true
+			break
+		}
+	}
+	if !foundDisk {
+		t.Error("Expected cdrom0 disk to be added to VM")
+	}
+
+	foundVolume := false
+	for _, vol := range updatedVM.Spec.Template.Spec.Volumes {
+		if vol.Name == "cdrom0" && vol.PersistentVolumeClaim != nil {
+			foundVolume = true
+			break
+		}
+	}
+	if !foundVolume {
+		t.Error("Expected cdrom0 volume to be added to VM")
+	}
+
+	// CDI path must set importing label with CDI prefix
+	labelKey := ImportingLabelPrefix + "cdrom0"
+	labelVal := updatedVM.GetLabels()[labelKey]
+	if !strings.HasPrefix(labelVal, CDIImportPrefix) {
+		t.Errorf("Expected importing label %s to start with %q, got %q", labelKey, CDIImportPrefix, labelVal)
+	}
+
+	// PVC must have DataSourceRef pointing to a VolumeImportSource
+	for _, pvc := range pvcList.Items {
+		if pvc.Labels[ImportPodVMLabel] == "test-vm" && pvc.Labels[ImportPodVolumeLabel] == "cdrom0" {
+			if pvc.Spec.DataSourceRef == nil {
+				t.Error("Block PVC must have DataSourceRef for CDI VolumeImportSource")
+			} else if pvc.Spec.DataSourceRef.Kind != "VolumeImportSource" {
+				t.Errorf("DataSourceRef kind must be VolumeImportSource, got %s", pvc.Spec.DataSourceRef.Kind)
+			}
+			if pvc.Spec.VolumeMode == nil || *pvc.Spec.VolumeMode != corev1.PersistentVolumeBlock {
+				t.Error("Block PVC must have VolumeMode=Block")
+			}
+			return
+		}
+	}
+	t.Error("Expected CDI PVC to carry vm.redfish and volume.vm.redfish labels")
 }
 
 func TestInsertVirtualMediaAsync_VMWithExistingRootDisk(t *testing.T) {
@@ -3553,10 +3579,23 @@ func TestInsertVirtualMediaAsync_VMWithExistingRootDisk(t *testing.T) {
 	mockConfig := &MockConfig{}
 	mockConfig.dataVolumeConfig.storageSize = "3Gi"
 	mockConfig.dataVolumeConfig.allowInsecureTLS = false
-	mockConfig.dataVolumeConfig.storageClass = ""
+	mockConfig.dataVolumeConfig.storageClass = "block-storage"
 	mockConfig.dataVolumeConfig.vmUpdateTimeout = "30s"
 	mockConfig.dataVolumeConfig.isoDownloadTimeout = "30m"
 	mockConfig.dataVolumeConfig.helperImage = "alpine:latest"
+
+	block := corev1.PersistentVolumeBlock
+	sp := &cdiv1beta1.StorageProfile{
+		ObjectMeta: metav1.ObjectMeta{Name: "block-storage"},
+		Status: cdiv1beta1.StorageProfileStatus{
+			ClaimPropertySets: []cdiv1beta1.ClaimPropertySet{
+				{VolumeMode: &block},
+			},
+		},
+	}
+	if err := mockDynamicClient.AddStorageProfile(sp); err != nil {
+		t.Fatalf("Failed to add StorageProfile: %v", err)
+	}
 
 	rootBootOrder := uint(1)
 	vm := &kubevirtv1.VirtualMachine{
@@ -3735,7 +3774,7 @@ func TestInsertVirtualMediaAsync_VMWithExistingRootDisk(t *testing.T) {
 }
 
 func TestInsertVirtualMediaAsync_RepeatedInsertion(t *testing.T) {
-	client, mockDynamic, fakeK8s := setupInsertVirtualMediaTest(t, false)
+	client, mockDynamic, fakeK8s := setupInsertVirtualMediaTestBlock(t, false)
 
 	// --- First insertion ---
 	err := client.insertVirtualMediaAsync("test-ns", "test-vm", "cdrom0", "http://example.com/first.iso")
@@ -3905,8 +3944,8 @@ func TestInsertVirtualMediaAsync_HTTPSFlow(t *testing.T) {
 			if tt.existingPVC != nil {
 				pvcs = append(pvcs, *tt.existingPVC)
 			}
-			// allowInsecureTLS=false + https -> CDI path (same as HTTP)
-			client, _, fakeK8s := setupInsertVirtualMediaTest(t, false, pvcs...)
+			// allowInsecureTLS=false + https + Block storage -> CDI path
+			client, _, fakeK8s := setupInsertVirtualMediaTestBlock(t, false, pvcs...)
 
 			err := client.insertVirtualMediaAsync("test-ns", "test-vm", "cdrom0", "https://example.com/image.iso")
 			if err != nil {
