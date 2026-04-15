@@ -1085,6 +1085,34 @@ func (s *Server) handleInsertVirtualMedia(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Check whether media is already inserted for this device.
+	if s.kubevirtClient != nil {
+		state, err := s.kubevirtClient.CheckInsertedMedia(namespace, vmName, internalMediaID, insertRequest.Image)
+		if err != nil {
+			logger.Error("Failed to check inserted media state for VM %s/%s: %v", namespace, vmName, err)
+			s.sendInternalError(w, "Failed to check virtual media state")
+			return
+		}
+		switch state {
+		case kubevirt.MediaStateReady:
+			w.WriteHeader(http.StatusNoContent)
+			return
+		case kubevirt.MediaStateImporting:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			s.encodeJSONResponse(w, map[string]string{
+				"Message": "Virtual media import is still in progress",
+			})
+			return
+		case kubevirt.MediaStateConflict:
+			s.sendRedfishError(w, r, errors.NewConflictError(
+				"VirtualMedia",
+				"Another virtual media image is already inserted. Eject the current media before inserting new media.",
+			))
+			return
+		}
+	}
+
 	// Create a task for this operation
 	taskName := fmt.Sprintf("Insert Media %s for VM %s", mediaID, vmName)
 	taskID := s.taskManager.CreateTask(taskName, namespace, vmName, internalMediaID, insertRequest.Image)

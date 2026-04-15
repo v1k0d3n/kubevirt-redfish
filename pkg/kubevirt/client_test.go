@@ -4436,3 +4436,193 @@ func TestHandleImportPodCompleted_ProcessesOurHelperPod(t *testing.T) {
 		t.Error("Importing label should have been removed for completed helper pod")
 	}
 }
+
+func TestCheckInsertedMedia_NoMediaInserted(t *testing.T) {
+	mockDynamic := NewMockDynamicClient()
+	vm := newTestVM("test-ns", "test-vm", nil, nil)
+	mockDynamic.AddVM(vm)
+
+	client := NewClientWithClients(fake.NewSimpleClientset(), mockDynamic, 30*time.Second, nil)
+
+	state, err := client.CheckInsertedMedia("test-ns", "test-vm", "cdrom0", "http://example.com/test.iso")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if state != MediaStateNone {
+		t.Errorf("expected MediaStateNone, got %d", state)
+	}
+}
+
+func TestCheckInsertedMedia_SameURLReady(t *testing.T) {
+	mockDynamic := NewMockDynamicClient()
+	vm := newTestVM("test-ns", "test-vm", nil, map[string]string{
+		VirtualMediaURLAnnotationPrefix + "cdrom0": "http://example.com/test.iso",
+	})
+	vm.Spec.Template.Spec.Volumes = append(vm.Spec.Template.Spec.Volumes, kubevirtv1.Volume{
+		Name: "cdrom0",
+		VolumeSource: kubevirtv1.VolumeSource{
+			PersistentVolumeClaim: &kubevirtv1.PersistentVolumeClaimVolumeSource{
+				PersistentVolumeClaimVolumeSource: corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: "test-vm-bootiso-123",
+				},
+			},
+		},
+	})
+	mockDynamic.AddVM(vm)
+
+	client := NewClientWithClients(fake.NewSimpleClientset(), mockDynamic, 30*time.Second, nil)
+
+	state, err := client.CheckInsertedMedia("test-ns", "test-vm", "cdrom0", "http://example.com/test.iso")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if state != MediaStateReady {
+		t.Errorf("expected MediaStateReady, got %d", state)
+	}
+}
+
+func TestCheckInsertedMedia_SameURLImporting(t *testing.T) {
+	mockDynamic := NewMockDynamicClient()
+	vm := newTestVM("test-ns", "test-vm",
+		map[string]string{ImportingLabelPrefix + "cdrom0": "cdi-test-vm-bootiso-123"},
+		map[string]string{VirtualMediaURLAnnotationPrefix + "cdrom0": "http://example.com/test.iso"},
+	)
+	vm.Spec.Template.Spec.Volumes = append(vm.Spec.Template.Spec.Volumes, kubevirtv1.Volume{
+		Name: "cdrom0",
+		VolumeSource: kubevirtv1.VolumeSource{
+			PersistentVolumeClaim: &kubevirtv1.PersistentVolumeClaimVolumeSource{
+				PersistentVolumeClaimVolumeSource: corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: "test-vm-bootiso-123",
+				},
+			},
+		},
+	})
+	mockDynamic.AddVM(vm)
+
+	client := NewClientWithClients(fake.NewSimpleClientset(), mockDynamic, 30*time.Second, nil)
+
+	state, err := client.CheckInsertedMedia("test-ns", "test-vm", "cdrom0", "http://example.com/test.iso")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if state != MediaStateImporting {
+		t.Errorf("expected MediaStateImporting, got %d", state)
+	}
+}
+
+func TestCheckInsertedMedia_DifferentURLConflict(t *testing.T) {
+	mockDynamic := NewMockDynamicClient()
+	vm := newTestVM("test-ns", "test-vm", nil, map[string]string{
+		VirtualMediaURLAnnotationPrefix + "cdrom0": "http://example.com/original.iso",
+	})
+	vm.Spec.Template.Spec.Volumes = append(vm.Spec.Template.Spec.Volumes, kubevirtv1.Volume{
+		Name: "cdrom0",
+		VolumeSource: kubevirtv1.VolumeSource{
+			PersistentVolumeClaim: &kubevirtv1.PersistentVolumeClaimVolumeSource{
+				PersistentVolumeClaimVolumeSource: corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: "test-vm-bootiso-123",
+				},
+			},
+		},
+	})
+	mockDynamic.AddVM(vm)
+
+	client := NewClientWithClients(fake.NewSimpleClientset(), mockDynamic, 30*time.Second, nil)
+
+	state, err := client.CheckInsertedMedia("test-ns", "test-vm", "cdrom0", "http://example.com/different.iso")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if state != MediaStateConflict {
+		t.Errorf("expected MediaStateConflict, got %d", state)
+	}
+}
+
+func TestCheckInsertedMedia_PVCButNoAnnotation(t *testing.T) {
+	mockDynamic := NewMockDynamicClient()
+	vm := newTestVM("test-ns", "test-vm", nil, nil)
+	vm.Spec.Template.Spec.Volumes = append(vm.Spec.Template.Spec.Volumes, kubevirtv1.Volume{
+		Name: "cdrom0",
+		VolumeSource: kubevirtv1.VolumeSource{
+			PersistentVolumeClaim: &kubevirtv1.PersistentVolumeClaimVolumeSource{
+				PersistentVolumeClaimVolumeSource: corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: "test-vm-bootiso-123",
+				},
+			},
+		},
+	})
+	mockDynamic.AddVM(vm)
+
+	client := NewClientWithClients(fake.NewSimpleClientset(), mockDynamic, 30*time.Second, nil)
+
+	// No annotation means storedURL="" which differs from the requested URL → conflict
+	state, err := client.CheckInsertedMedia("test-ns", "test-vm", "cdrom0", "http://example.com/test.iso")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if state != MediaStateConflict {
+		t.Errorf("expected MediaStateConflict, got %d", state)
+	}
+}
+
+func TestInsertVirtualMedia_StoresURLAnnotation(t *testing.T) {
+	client, mockDynamic, _ := setupInsertVirtualMediaTestBlock(t, false)
+
+	err := client.InsertVirtualMedia("test-ns", "test-vm", "cdrom0", "http://example.com/test.iso")
+	if err != nil {
+		t.Fatalf("InsertVirtualMedia failed: %v", err)
+	}
+
+	vm, err := mockDynamic.GetVM("test-ns", "test-vm")
+	if err != nil {
+		t.Fatalf("Failed to get VM: %v", err)
+	}
+
+	annotationKey := VirtualMediaURLAnnotationPrefix + "cdrom0"
+	storedURL := vm.GetAnnotations()[annotationKey]
+	if storedURL != "http://example.com/test.iso" {
+		t.Errorf("expected annotation %q = %q, got %q", annotationKey, "http://example.com/test.iso", storedURL)
+	}
+}
+
+func TestEjectVirtualMedia_ClearsURLAnnotation(t *testing.T) {
+	mockDynamic := NewMockDynamicClient()
+	vm := newTestVM("test-ns", "test-vm", nil, map[string]string{
+		VirtualMediaURLAnnotationPrefix + "cdrom0": "http://example.com/test.iso",
+	})
+	vm.Spec.Template.Spec.Domain.Devices.Disks = append(vm.Spec.Template.Spec.Domain.Devices.Disks, kubevirtv1.Disk{
+		Name: "cdrom0",
+		DiskDevice: kubevirtv1.DiskDevice{
+			CDRom: &kubevirtv1.CDRomTarget{Bus: kubevirtv1.DiskBusSATA},
+		},
+	})
+	vm.Spec.Template.Spec.Volumes = append(vm.Spec.Template.Spec.Volumes, kubevirtv1.Volume{
+		Name: "cdrom0",
+		VolumeSource: kubevirtv1.VolumeSource{
+			PersistentVolumeClaim: &kubevirtv1.PersistentVolumeClaimVolumeSource{
+				PersistentVolumeClaimVolumeSource: corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: "test-vm-bootiso-123",
+				},
+			},
+		},
+	})
+	mockDynamic.AddVM(vm)
+
+	fakeK8s := fake.NewSimpleClientset()
+	client := NewClientWithClients(fakeK8s, mockDynamic, 30*time.Second, nil)
+
+	err := client.EjectVirtualMedia("test-ns", "test-vm", "cdrom0")
+	if err != nil {
+		t.Fatalf("EjectVirtualMedia failed: %v", err)
+	}
+
+	updated, err := mockDynamic.GetVM("test-ns", "test-vm")
+	if err != nil {
+		t.Fatalf("Failed to get VM: %v", err)
+	}
+
+	annotationKey := VirtualMediaURLAnnotationPrefix + "cdrom0"
+	if url, found := updated.GetAnnotations()[annotationKey]; found {
+		t.Errorf("expected annotation %q to be removed, but found %q", annotationKey, url)
+	}
+}

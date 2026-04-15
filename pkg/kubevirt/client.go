@@ -1596,6 +1596,47 @@ func (c *Client) downloadISO(imageURL string) (string, error) {
 	return filePath, nil
 }
 
+// CheckInsertedMedia checks whether virtual media is already inserted for the
+// given device and how it relates to the requested imageURL. The returned
+// MediaState tells the caller whether to proceed with insertion, return an
+// idempotent success, or reject with a conflict.
+func (c *Client) CheckInsertedMedia(namespace, name, mediaID, imageURL string) (MediaState, error) {
+	vm, err := c.GetVM(namespace, name)
+	if err != nil {
+		return MediaStateNone, fmt.Errorf("failed to get VM %s/%s: %w", namespace, name, err)
+	}
+
+	// Check if the device has a PVC volume attached
+	hasPVC := false
+	if vm.Spec.Template != nil {
+		for _, vol := range vm.Spec.Template.Spec.Volumes {
+			if vol.Name == mediaID && vol.PersistentVolumeClaim != nil {
+				hasPVC = true
+				break
+			}
+		}
+	}
+	if !hasPVC {
+		return MediaStateNone, nil
+	}
+
+	// A PVC is attached. Compare the stored URL.
+	annotationKey := VirtualMediaURLAnnotationPrefix + mediaID
+	storedURL := vm.GetAnnotations()[annotationKey]
+
+	if storedURL != imageURL {
+		return MediaStateConflict, nil
+	}
+
+	// Same URL — check whether import is still in progress.
+	labelKey := ImportingLabelPrefix + mediaID
+	if vm.GetLabels()[labelKey] != "" {
+		return MediaStateImporting, nil
+	}
+
+	return MediaStateReady, nil
+}
+
 // InsertVirtualMedia inserts virtual media into a VirtualMachine
 func (c *Client) InsertVirtualMedia(namespace, name, mediaID, imageURL string) error {
 	logger.Info("Inserting virtual media %s with image %s for VM %s/%s", mediaID, imageURL, namespace, name)
@@ -1732,6 +1773,13 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 			vmCopy.Spec.Template.Spec.Volumes = append(vmCopy.Spec.Template.Spec.Volumes, newVolume)
 			logger.Info("Added new volume reference %s for PVC %s", deviceName, dataVolumeName)
 		}
+
+		annotations := vmCopy.GetAnnotations()
+		if annotations == nil {
+			annotations = map[string]string{}
+		}
+		annotations[VirtualMediaURLAnnotationPrefix+deviceName] = imageURL
+		vmCopy.SetAnnotations(annotations)
 
 		// Compute merge patch from changes (preserves unknown fields)
 		patch, err := computeVMPatch(vm, vmCopy)
@@ -2411,6 +2459,10 @@ func (c *Client) EjectVirtualMedia(namespace, name, mediaID string) error {
 	}
 	vmCopy.Spec.Template.Spec.Volumes = newVolumes
 
+	annotations := vmCopy.GetAnnotations()
+	delete(annotations, VirtualMediaURLAnnotationPrefix+mediaID)
+	vmCopy.SetAnnotations(annotations)
+
 	// Compute merge patch from changes (preserves unknown fields)
 	patch, err := computeVMPatch(vm, vmCopy)
 	if err != nil {
@@ -2847,6 +2899,20 @@ const (
 	ImportPodVolumeLabel  = "volume.vm.redfish"
 	CDIImportPrefix       = "cdi-"
 	CDIManagedLabel       = "cdi.kubevirt.io"
+)
+
+// VirtualMediaURLAnnotationPrefix is used to record the image URL of currently
+// inserted virtual media. The device name is appended (e.g. "virtual-media.redfish/cdrom0").
+const VirtualMediaURLAnnotationPrefix = "virtual-media.redfish/"
+
+// MediaState describes the state of an already-inserted virtual media device.
+type MediaState int
+
+const (
+	MediaStateNone      MediaState = iota // no media inserted
+	MediaStateImporting                   // media inserted, import in progress
+	MediaStateReady                       // media inserted and ready
+	MediaStateConflict                    // different media already inserted
 )
 
 // isCDIManagedPod returns true when the pod was created by CDI (e.g. the
