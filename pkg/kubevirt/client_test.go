@@ -22,6 +22,7 @@ package kubevirt
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -33,6 +34,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	cdiv1beta1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
@@ -3541,6 +3543,117 @@ func TestInsertVirtualMediaAsync_HTTPFlow(t *testing.T) {
 			}
 			t.Error("Expected CDI PVC to carry vm.redfish and volume.vm.redfish labels")
 		})
+	}
+}
+
+func TestInsertVirtualMediaAsync_RepeatedInsertion(t *testing.T) {
+	client, mockDynamic, fakeK8s := setupInsertVirtualMediaTest(t, false)
+
+	// --- First insertion ---
+	err := client.insertVirtualMediaAsync("test-ns", "test-vm", "cdrom0", "http://example.com/first.iso")
+	if err != nil {
+		t.Fatalf("First insertVirtualMediaAsync failed: %v", err)
+	}
+
+	vm1, err := mockDynamic.GetVM("test-ns", "test-vm")
+	if err != nil {
+		t.Fatalf("Failed to get VM after first insert: %v", err)
+	}
+
+	// Find the PVC name from the cdrom0 volume
+	var firstPVCName string
+	for _, vol := range vm1.Spec.Template.Spec.Volumes {
+		if vol.Name == "cdrom0" && vol.PersistentVolumeClaim != nil {
+			firstPVCName = vol.PersistentVolumeClaim.ClaimName
+			break
+		}
+	}
+	if firstPVCName == "" {
+		t.Fatal("Expected cdrom0 volume to reference a PVC after first insert")
+	}
+
+	// Verify PVC exists
+	_, err = fakeK8s.CoreV1().PersistentVolumeClaims("test-ns").Get(context.Background(), firstPVCName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Expected PVC %s to exist after first insert: %v", firstPVCName, err)
+	}
+
+	// Verify VolumeImportSource exists
+	firstVISName := sanitizeResourceName(fmt.Sprintf("%s-populator", firstPVCName))
+	gvrVIS := schema.GroupVersionResource{Group: "cdi.kubevirt.io", Version: "v1beta1", Resource: "volumeimportsources"}
+	_, err = mockDynamic.Resource(gvrVIS).Namespace("test-ns").Get(context.Background(), firstVISName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Expected VolumeImportSource %s to exist after first insert: %v", firstVISName, err)
+	}
+
+	firstImportLabel := vm1.GetLabels()[ImportingLabelPrefix+"cdrom0"]
+	if !strings.HasPrefix(firstImportLabel, CDIImportPrefix) {
+		t.Fatalf("Expected importing label to start with %q, got %q", CDIImportPrefix, firstImportLabel)
+	}
+
+	// --- Second insertion with different URL ---
+	err = client.insertVirtualMediaAsync("test-ns", "test-vm", "cdrom0", "http://example.com/second.iso")
+	if err != nil {
+		t.Fatalf("Second insertVirtualMediaAsync failed: %v", err)
+	}
+
+	vm2, err := mockDynamic.GetVM("test-ns", "test-vm")
+	if err != nil {
+		t.Fatalf("Failed to get VM after second insert: %v", err)
+	}
+
+	// cdrom0 disk must still exist
+	foundDisk := false
+	for _, disk := range vm2.Spec.Template.Spec.Domain.Devices.Disks {
+		if disk.Name == "cdrom0" && disk.CDRom != nil {
+			foundDisk = true
+			break
+		}
+	}
+	if !foundDisk {
+		t.Error("Expected cdrom0 disk to still exist after second insert")
+	}
+
+	// cdrom0 volume must point to a DIFFERENT (new) PVC
+	var secondPVCName string
+	for _, vol := range vm2.Spec.Template.Spec.Volumes {
+		if vol.Name == "cdrom0" && vol.PersistentVolumeClaim != nil {
+			secondPVCName = vol.PersistentVolumeClaim.ClaimName
+			break
+		}
+	}
+	if secondPVCName == "" {
+		t.Fatal("Expected cdrom0 volume to reference a PVC after second insert")
+	}
+	if secondPVCName == firstPVCName {
+		t.Errorf("Expected cdrom0 volume to be updated to a new PVC, but still references %s", firstPVCName)
+	}
+
+	// New PVC must exist
+	_, err = fakeK8s.CoreV1().PersistentVolumeClaims("test-ns").Get(context.Background(), secondPVCName, metav1.GetOptions{})
+	if err != nil {
+		t.Errorf("Expected new PVC %s to exist: %v", secondPVCName, err)
+	}
+
+	// Old PVC must be cleaned up
+	_, err = fakeK8s.CoreV1().PersistentVolumeClaims("test-ns").Get(context.Background(), firstPVCName, metav1.GetOptions{})
+	if err == nil {
+		t.Errorf("Expected old PVC %s to be deleted after second insertion, but it still exists", firstPVCName)
+	}
+
+	// Old VolumeImportSource must be cleaned up
+	_, err = mockDynamic.Resource(gvrVIS).Namespace("test-ns").Get(context.Background(), firstVISName, metav1.GetOptions{})
+	if err == nil {
+		t.Errorf("Expected old VolumeImportSource %s to be deleted after second insertion, but it still exists", firstVISName)
+	}
+
+	// Importing label must reference the new import
+	secondImportLabel := vm2.GetLabels()[ImportingLabelPrefix+"cdrom0"]
+	if secondImportLabel == firstImportLabel {
+		t.Errorf("Expected importing label to be updated, but still has value %q", firstImportLabel)
+	}
+	if !strings.HasPrefix(secondImportLabel, CDIImportPrefix) {
+		t.Errorf("Expected importing label to start with %q, got %q", CDIImportPrefix, secondImportLabel)
 	}
 }
 

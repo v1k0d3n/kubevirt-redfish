@@ -1655,6 +1655,8 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 	logger.Info("Creating CD-ROM device %s in VM spec first", deviceName)
 	logger.Debug("Creating CD-ROM device %s in VM spec", deviceName)
 
+	var oldPVCName string
+
 	maxRetries := 3
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		logger.Debug("VM update attempt %d/%d", attempt, maxRetries)
@@ -1668,29 +1670,19 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 
 		vmCopy := vm.DeepCopy()
 
-		// Ensure template exists
 		if vmCopy.Spec.Template == nil {
 			vmCopy.Spec.Template = &kubevirtv1.VirtualMachineInstanceTemplateSpec{}
 		}
 
-		// Check if disk already exists
 		diskExists := false
-		existingDiskIndex := -1
-		for i, disk := range vmCopy.Spec.Template.Spec.Domain.Devices.Disks {
+		for _, disk := range vmCopy.Spec.Template.Spec.Domain.Devices.Disks {
 			if disk.Name == deviceName {
 				diskExists = true
-				existingDiskIndex = i
-				logger.Debug("Found existing disk %s at index %d", deviceName, i)
 				break
 			}
 		}
 
-		if diskExists {
-			// Disk already exists, no need to add
-			logger.Info("CD-ROM device %s already exists", deviceName)
-			logger.Debug("CD-ROM device %s already exists at index %d", deviceName, existingDiskIndex)
-		} else {
-			// Add new CD-ROM disk
+		if !diskExists {
 			newDisk := kubevirtv1.Disk{
 				Name: deviceName,
 				DiskDevice: kubevirtv1.DiskDevice{
@@ -1701,21 +1693,32 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 			}
 			vmCopy.Spec.Template.Spec.Domain.Devices.Disks = append(vmCopy.Spec.Template.Spec.Domain.Devices.Disks, newDisk)
 			logger.Info("Added new CD-ROM device %s", deviceName)
-			logger.Debug("Added new CD-ROM device %s", deviceName)
 		}
 
-		// Check if volume already exists
-		volumeExists := false
-		for _, volume := range vmCopy.Spec.Template.Spec.Volumes {
+		oldPVCName = ""
+		volumeUpdated := false
+		for i, volume := range vmCopy.Spec.Template.Spec.Volumes {
 			if volume.Name == deviceName {
-				volumeExists = true
-				logger.Debug("Found existing volume %s", deviceName)
+				if volume.PersistentVolumeClaim != nil {
+					oldPVCName = volume.PersistentVolumeClaim.ClaimName
+				}
+				vmCopy.Spec.Template.Spec.Volumes[i] = kubevirtv1.Volume{
+					Name: deviceName,
+					VolumeSource: kubevirtv1.VolumeSource{
+						PersistentVolumeClaim: &kubevirtv1.PersistentVolumeClaimVolumeSource{
+							PersistentVolumeClaimVolumeSource: corev1.PersistentVolumeClaimVolumeSource{
+								ClaimName: dataVolumeName,
+							},
+						},
+					},
+				}
+				volumeUpdated = true
+				logger.Info("Updated volume reference %s: %s -> %s", deviceName, oldPVCName, dataVolumeName)
 				break
 			}
 		}
 
-		if !volumeExists {
-			// Add new volume referencing the PVC
+		if !volumeUpdated {
 			newVolume := kubevirtv1.Volume{
 				Name: deviceName,
 				VolumeSource: kubevirtv1.VolumeSource{
@@ -1728,10 +1731,6 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 			}
 			vmCopy.Spec.Template.Spec.Volumes = append(vmCopy.Spec.Template.Spec.Volumes, newVolume)
 			logger.Info("Added new volume reference %s for PVC %s", deviceName, dataVolumeName)
-			logger.Debug("Added new volume reference %s for PVC %s", deviceName, dataVolumeName)
-		} else {
-			logger.Info("Volume reference %s already exists", deviceName)
-			logger.Debug("Volume reference %s already exists", deviceName)
 		}
 
 		// Compute merge patch from changes (preserves unknown fields)
@@ -1765,7 +1764,25 @@ func (c *Client) insertVirtualMediaAsync(namespace, name, mediaID, imageURL stri
 	}
 
 	logger.Info("Successfully created CD-ROM device %s in VM spec", deviceName)
-	logger.Debug("Successfully created CD-ROM device %s in VM spec for VM %s/%s", deviceName, namespace, name)
+
+	// Clean up old PVC and its VolumeImportSource when re-inserting media
+	if oldPVCName != "" && oldPVCName != dataVolumeName {
+		logger.Info("Cleaning up previous virtual media resources: PVC %s", oldPVCName)
+
+		if err := c.kubernetesClient.CoreV1().PersistentVolumeClaims(namespace).Delete(ctx, oldPVCName, metav1.DeleteOptions{}); err != nil {
+			logger.Warning("Failed to delete old PVC %s: %v", oldPVCName, err)
+		} else {
+			logger.Info("Deleted old PVC %s", oldPVCName)
+		}
+
+		oldVISName := sanitizeResourceName(fmt.Sprintf("%s-populator", oldPVCName))
+		gvrVIS := schema.GroupVersionResource{Group: "cdi.kubevirt.io", Version: "v1beta1", Resource: "volumeimportsources"}
+		if err := c.dynamicClient.Resource(gvrVIS).Namespace(namespace).Delete(ctx, oldVISName, metav1.DeleteOptions{}); err != nil {
+			logger.Warning("Failed to delete old VolumeImportSource %s: %v", oldVISName, err)
+		} else {
+			logger.Info("Deleted old VolumeImportSource %s", oldVISName)
+		}
+	}
 
 	// Now create the PVC and import the ISO
 	if allowInsecureTLS && u.Scheme == "https" {
