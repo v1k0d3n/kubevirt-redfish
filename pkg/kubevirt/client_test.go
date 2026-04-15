@@ -3546,6 +3546,194 @@ func TestInsertVirtualMediaAsync_HTTPFlow(t *testing.T) {
 	}
 }
 
+func TestInsertVirtualMediaAsync_VMWithExistingRootDisk(t *testing.T) {
+	fakeK8sClient := fake.NewSimpleClientset()
+	mockDynamicClient := NewMockDynamicClient()
+
+	mockConfig := &MockConfig{}
+	mockConfig.dataVolumeConfig.storageSize = "3Gi"
+	mockConfig.dataVolumeConfig.allowInsecureTLS = false
+	mockConfig.dataVolumeConfig.storageClass = ""
+	mockConfig.dataVolumeConfig.vmUpdateTimeout = "30s"
+	mockConfig.dataVolumeConfig.isoDownloadTimeout = "30m"
+	mockConfig.dataVolumeConfig.helperImage = "alpine:latest"
+
+	rootBootOrder := uint(1)
+	vm := &kubevirtv1.VirtualMachine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-vm",
+			Namespace: "test-ns",
+		},
+		Spec: kubevirtv1.VirtualMachineSpec{
+			Template: &kubevirtv1.VirtualMachineInstanceTemplateSpec{
+				Spec: kubevirtv1.VirtualMachineInstanceSpec{
+					Domain: kubevirtv1.DomainSpec{
+						Devices: kubevirtv1.Devices{
+							Disks: []kubevirtv1.Disk{
+								{
+									Name:      "rootdisk",
+									BootOrder: &rootBootOrder,
+									DiskDevice: kubevirtv1.DiskDevice{
+										Disk: &kubevirtv1.DiskTarget{Bus: kubevirtv1.DiskBusVirtio},
+									},
+								},
+							},
+						},
+					},
+					Volumes: []kubevirtv1.Volume{
+						{
+							Name: "rootdisk",
+							VolumeSource: kubevirtv1.VolumeSource{
+								DataVolume: &kubevirtv1.DataVolumeSource{Name: "test-vm-rootdisk"},
+							},
+						},
+					},
+				},
+			},
+			DataVolumeTemplates: []kubevirtv1.DataVolumeTemplateSpec{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "test-vm-rootdisk"},
+					Spec: cdiv1beta1.DataVolumeSpec{
+						Storage: &cdiv1beta1.StorageSpec{
+							Resources: corev1.VolumeResourceRequirements{
+								Requests: corev1.ResourceList{
+									"storage": resource.MustParse("120Gi"),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	if err := mockDynamicClient.AddVM(vm); err != nil {
+		t.Fatalf("Failed to add VM: %v", err)
+	}
+
+	client := NewClientWithClients(fakeK8sClient, mockDynamicClient, 30*time.Second, mockConfig)
+
+	err := client.insertVirtualMediaAsync("test-ns", "test-vm", "cdrom0", "http://example.com/agent.iso")
+	if err != nil {
+		t.Fatalf("insertVirtualMediaAsync failed: %v", err)
+	}
+
+	updatedVM, err := mockDynamicClient.GetVM("test-ns", "test-vm")
+	if err != nil {
+		t.Fatalf("Failed to get VM: %v", err)
+	}
+
+	// Rootdisk must be unchanged
+	var rootdiskVol *kubevirtv1.Volume
+	var cdromVol *kubevirtv1.Volume
+	for i, vol := range updatedVM.Spec.Template.Spec.Volumes {
+		switch vol.Name {
+		case "rootdisk":
+			rootdiskVol = &updatedVM.Spec.Template.Spec.Volumes[i]
+		case "cdrom0":
+			cdromVol = &updatedVM.Spec.Template.Spec.Volumes[i]
+		}
+	}
+
+	if rootdiskVol == nil {
+		t.Fatal("Rootdisk volume must still be present after virtual media insertion")
+	}
+	if rootdiskVol.DataVolume == nil || rootdiskVol.DataVolume.Name != "test-vm-rootdisk" {
+		t.Errorf("Rootdisk volume must still reference DataVolume test-vm-rootdisk, got %+v", rootdiskVol.VolumeSource)
+	}
+
+	if cdromVol == nil {
+		t.Fatal("cdrom0 volume must be created by virtual media insertion")
+	}
+	if cdromVol.PersistentVolumeClaim == nil {
+		t.Fatal("cdrom0 volume must reference a PVC")
+	}
+	bootIsoPVCName := cdromVol.PersistentVolumeClaim.ClaimName
+	if !strings.Contains(bootIsoPVCName, "bootiso") {
+		t.Errorf("cdrom0 PVC name should contain 'bootiso', got %s", bootIsoPVCName)
+	}
+
+	// Rootdisk disk entry must be unchanged (virtio, boot order 1)
+	var rootdiskDisk *kubevirtv1.Disk
+	var cdromDisk *kubevirtv1.Disk
+	for i, disk := range updatedVM.Spec.Template.Spec.Domain.Devices.Disks {
+		switch disk.Name {
+		case "rootdisk":
+			rootdiskDisk = &updatedVM.Spec.Template.Spec.Domain.Devices.Disks[i]
+		case "cdrom0":
+			cdromDisk = &updatedVM.Spec.Template.Spec.Domain.Devices.Disks[i]
+		}
+	}
+
+	if rootdiskDisk == nil {
+		t.Fatal("Rootdisk disk entry must still be present")
+	}
+	if rootdiskDisk.Disk == nil || rootdiskDisk.Disk.Bus != kubevirtv1.DiskBusVirtio {
+		t.Error("Rootdisk must remain a virtio disk (not converted to cdrom)")
+	}
+	if rootdiskDisk.BootOrder == nil || *rootdiskDisk.BootOrder != 1 {
+		t.Error("Rootdisk boot order must be preserved")
+	}
+
+	if cdromDisk == nil {
+		t.Fatal("cdrom0 disk must be created")
+	}
+	if cdromDisk.CDRom == nil {
+		t.Error("cdrom0 must be a CDRom device")
+	}
+
+	// Verify the boot ISO PVC was created with correct DataSourceRef
+	bootIsoPVC, err := fakeK8sClient.CoreV1().PersistentVolumeClaims("test-ns").Get(
+		context.Background(), bootIsoPVCName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Boot ISO PVC %s must exist: %v", bootIsoPVCName, err)
+	}
+
+	if bootIsoPVC.Spec.DataSourceRef == nil {
+		t.Fatal("Boot ISO PVC must have DataSourceRef pointing to a VolumeImportSource")
+	}
+	if bootIsoPVC.Spec.DataSourceRef.Kind != "VolumeImportSource" {
+		t.Errorf("DataSourceRef kind must be VolumeImportSource, got %s", bootIsoPVC.Spec.DataSourceRef.Kind)
+	}
+	expectedVISName := sanitizeResourceName(fmt.Sprintf("%s-populator", bootIsoPVCName))
+	if bootIsoPVC.Spec.DataSourceRef.Name != expectedVISName {
+		t.Errorf("DataSourceRef must reference %s, got %s", expectedVISName, bootIsoPVC.Spec.DataSourceRef.Name)
+	}
+
+	// Verify VolumeImportSource was created and references the ISO URL
+	gvrVIS := schema.GroupVersionResource{Group: "cdi.kubevirt.io", Version: "v1beta1", Resource: "volumeimportsources"}
+	visObj, err := mockDynamicClient.Resource(gvrVIS).Namespace("test-ns").Get(
+		context.Background(), expectedVISName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("VolumeImportSource %s must exist: %v", expectedVISName, err)
+	}
+	httpURL, _, _ := unstructured.NestedString(visObj.Object, "spec", "source", "http", "url")
+	if httpURL != "http://example.com/agent.iso" {
+		t.Errorf("VolumeImportSource must reference the ISO URL, got %s", httpURL)
+	}
+
+	// Verify PVC carries the correct VM tracking labels
+	if bootIsoPVC.Labels[ImportPodVMLabel] != "test-vm" {
+		t.Errorf("Boot ISO PVC must have %s=test-vm label, got %s", ImportPodVMLabel, bootIsoPVC.Labels[ImportPodVMLabel])
+	}
+	if bootIsoPVC.Labels[ImportPodVolumeLabel] != "cdrom0" {
+		t.Errorf("Boot ISO PVC must have %s=cdrom0 label, got %s", ImportPodVolumeLabel, bootIsoPVC.Labels[ImportPodVolumeLabel])
+	}
+
+	// Verify the importing label on the VM references the boot ISO PVC
+	importLabel := updatedVM.GetLabels()[ImportingLabelPrefix+"cdrom0"]
+	if importLabel != CDIImportPrefix+bootIsoPVCName {
+		t.Errorf("Importing label must be %s%s, got %s", CDIImportPrefix, bootIsoPVCName, importLabel)
+	}
+
+	// DataVolumeTemplates must be untouched
+	if len(updatedVM.Spec.DataVolumeTemplates) != 1 {
+		t.Errorf("DataVolumeTemplates should be unchanged (1 entry), got %d", len(updatedVM.Spec.DataVolumeTemplates))
+	}
+	if updatedVM.Spec.DataVolumeTemplates[0].Name != "test-vm-rootdisk" {
+		t.Errorf("DataVolumeTemplate must still be test-vm-rootdisk, got %s", updatedVM.Spec.DataVolumeTemplates[0].Name)
+	}
+}
+
 func TestInsertVirtualMediaAsync_RepeatedInsertion(t *testing.T) {
 	client, mockDynamic, fakeK8s := setupInsertVirtualMediaTest(t, false)
 
