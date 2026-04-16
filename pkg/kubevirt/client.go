@@ -2487,6 +2487,20 @@ func (c *Client) EjectVirtualMedia(namespace, name, mediaID string) error {
 
 	logger.Info("Successfully updated VM %s/%s to remove CD-ROM and volume for media %s", namespace, name, mediaID)
 
+	// Kill any running helper pod for this device and remove the importing label
+	// so a stale pod cannot trigger a deferred power-on after the media is gone.
+	labelKey := ImportingLabelPrefix + mediaID
+	helperPodName := vm.GetLabels()[labelKey]
+	if helperPodName != "" {
+		logger.Info("Cleaning up active import for device %s: deleting helper pod %s and removing importing label", mediaID, helperPodName)
+		if delErr := c.kubernetesClient.CoreV1().Pods(namespace).Delete(ctx, helperPodName, metav1.DeleteOptions{}); delErr != nil {
+			logger.Warning("Failed to delete helper pod %s during eject: %v", helperPodName, delErr)
+		}
+		if rmErr := c.removeImportingLabel(namespace, name, mediaID); rmErr != nil {
+			logger.Warning("Failed to remove importing label during eject for VM %s/%s: %v", namespace, name, rmErr)
+		}
+	}
+
 	// Clean up associated PVC and VolumeImportSource using the actual names
 	// If we couldn't find the actual PVC name, try the fallback name
 	pvcName := actualPVCName
@@ -3476,7 +3490,11 @@ func (c *Client) processImportPodEvents(ctx context.Context, namespace string, w
 	}
 }
 
-// handleImportPodCompleted processes a completed/failed import pod
+// handleImportPodCompleted processes a completed/failed import pod.
+// It only removes the importing label when this pod is still the active
+// import for the device. A stale pod from a previous insert cycle (whose
+// PVC was already ejected and replaced) must not clear the label that now
+// tracks the newer import.
 func (c *Client) handleImportPodCompleted(pod *corev1.Pod) {
 	// Re-fetch the pod from the API server to get fresh data
 	freshPod, err := c.kubernetesClient.CoreV1().Pods(pod.Namespace).Get(context.Background(), pod.Name, metav1.GetOptions{})
@@ -3517,7 +3535,21 @@ func (c *Client) handleImportPodCompleted(pod *corev1.Pod) {
 		logger.Info("Deleted completed import pod %s", pod.Name)
 	}
 
-	// Remove the importing label from the VM — this may trigger handlePowerAfterImport
+	// Only clear the importing label if this pod is the one currently tracked.
+	// After an eject+re-insert cycle the label points to the new pod, and a
+	// stale pod completing must not clear it.
+	vm, vmErr := c.GetVM(vmNamespace, vmName)
+	if vmErr != nil {
+		logger.Warning("Cannot verify importing label owner for pod %s: %v", pod.Name, vmErr)
+		return
+	}
+	labelKey := ImportingLabelPrefix + deviceName
+	currentPodName := vm.GetLabels()[labelKey]
+	if currentPodName != pod.Name {
+		logger.Info("Stale import pod %s completed (current label value is %q) — skipping label removal for VM %s/%s", pod.Name, currentPodName, vmNamespace, vmName)
+		return
+	}
+
 	if err := c.removeImportingLabel(vmNamespace, vmName, deviceName); err != nil {
 		logger.Error("Failed to remove importing label from VM %s/%s: %v", vmNamespace, vmName, err)
 	}

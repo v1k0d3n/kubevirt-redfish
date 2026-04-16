@@ -4626,3 +4626,111 @@ func TestEjectVirtualMedia_ClearsURLAnnotation(t *testing.T) {
 		t.Errorf("expected annotation %q to be removed, but found %q", annotationKey, url)
 	}
 }
+
+func TestHandleImportPodCompleted_StalePodSkipsLabelRemoval(t *testing.T) {
+	mockDynamic := NewMockDynamicClient()
+
+	stalePod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "copy-iso-old-pod",
+			Namespace: "test-ns",
+			Labels: map[string]string{
+				ImportPodVMLabel:     "test-vm",
+				ImportPodVolumeLabel: "cdrom0",
+			},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodSucceeded},
+	}
+	fakeK8s := fake.NewSimpleClientset(stalePod)
+
+	// The VM's importing label points to a DIFFERENT (newer) pod
+	vm := newTestVM("test-ns", "test-vm", map[string]string{
+		ImportingLabelPrefix + "cdrom0": "copy-iso-new-pod",
+	}, nil)
+	mockDynamic.AddVM(vm)
+
+	client := NewClientWithClients(fakeK8s, mockDynamic, 30*time.Second, nil)
+	client.handleImportPodCompleted(stalePod)
+
+	// The stale pod should still be deleted (cleanup)
+	_, err := fakeK8s.CoreV1().Pods("test-ns").Get(context.Background(), "copy-iso-old-pod", metav1.GetOptions{})
+	if err == nil {
+		t.Error("Stale pod should have been deleted")
+	}
+
+	// But the importing label must still be present (points to the new pod)
+	updated, err := mockDynamic.GetVM("test-ns", "test-vm")
+	if err != nil {
+		t.Fatalf("Failed to get VM: %v", err)
+	}
+	labelVal := updated.GetLabels()[ImportingLabelPrefix+"cdrom0"]
+	if labelVal != "copy-iso-new-pod" {
+		t.Errorf("expected importing label to still be %q, got %q", "copy-iso-new-pod", labelVal)
+	}
+}
+
+func TestEjectVirtualMedia_KillsHelperPodAndClearsLabel(t *testing.T) {
+	mockDynamic := NewMockDynamicClient()
+
+	helperPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "copy-iso-active-pod",
+			Namespace: "test-ns",
+			Labels: map[string]string{
+				ImportPodVMLabel:     "test-vm",
+				ImportPodVolumeLabel: "cdrom0",
+			},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	fakeK8s := fake.NewSimpleClientset(helperPod)
+
+	vm := newTestVM("test-ns", "test-vm",
+		map[string]string{ImportingLabelPrefix + "cdrom0": "copy-iso-active-pod"},
+		map[string]string{VirtualMediaURLAnnotationPrefix + "cdrom0": "http://example.com/test.iso"},
+	)
+	vm.Spec.Template.Spec.Domain.Devices.Disks = append(vm.Spec.Template.Spec.Domain.Devices.Disks, kubevirtv1.Disk{
+		Name: "cdrom0",
+		DiskDevice: kubevirtv1.DiskDevice{
+			CDRom: &kubevirtv1.CDRomTarget{Bus: kubevirtv1.DiskBusSATA},
+		},
+	})
+	vm.Spec.Template.Spec.Volumes = append(vm.Spec.Template.Spec.Volumes, kubevirtv1.Volume{
+		Name: "cdrom0",
+		VolumeSource: kubevirtv1.VolumeSource{
+			PersistentVolumeClaim: &kubevirtv1.PersistentVolumeClaimVolumeSource{
+				PersistentVolumeClaimVolumeSource: corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: "test-vm-bootiso-123",
+				},
+			},
+		},
+	})
+	mockDynamic.AddVM(vm)
+
+	client := NewClientWithClients(fakeK8s, mockDynamic, 30*time.Second, nil)
+
+	err := client.EjectVirtualMedia("test-ns", "test-vm", "cdrom0")
+	if err != nil {
+		t.Fatalf("EjectVirtualMedia failed: %v", err)
+	}
+
+	// The helper pod should be deleted
+	_, err = fakeK8s.CoreV1().Pods("test-ns").Get(context.Background(), "copy-iso-active-pod", metav1.GetOptions{})
+	if err == nil {
+		t.Error("Running helper pod should have been killed during eject")
+	}
+
+	// The importing label should be removed
+	updated, err := mockDynamic.GetVM("test-ns", "test-vm")
+	if err != nil {
+		t.Fatalf("Failed to get VM: %v", err)
+	}
+	if val, found := updated.GetLabels()[ImportingLabelPrefix+"cdrom0"]; found {
+		t.Errorf("importing label should have been removed, but found %q", val)
+	}
+
+	// The URL annotation should also be removed
+	if url, found := updated.GetAnnotations()[VirtualMediaURLAnnotationPrefix+"cdrom0"]; found {
+		t.Errorf("URL annotation should have been removed, but found %q", url)
+	}
+}
