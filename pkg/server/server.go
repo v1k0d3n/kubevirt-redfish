@@ -1550,17 +1550,17 @@ func (s *Server) handleBootUpdate(w http.ResponseWriter, r *http.Request, system
 		}
 	}
 
-	// Update boot configuration
-	err := s.kubevirtClient.SetVMBootOptions(chassisConfig.Namespace, vmName, bootConfig)
+	// Persist VM boot configuration in annotations
+	err := s.kubevirtClient.RecordVMBootOptionsAsAnnotations(chassisConfig.Namespace, vmName, bootConfig)
 	if err != nil {
 		logger.Error("Failed to update boot configuration for VM %s: %v", vmName, err)
 		s.sendInternalError(w, "Failed to update boot configuration")
 		return
 	}
 
-	// If boot target is CD, also set boot order
+	// Recompute boot order
 	if bootTarget, found := bootConfig["bootSourceOverrideTarget"]; found {
-		if target, ok := bootTarget.(string); ok && target == "Cd" {
+		if target, ok := bootTarget.(string); ok {
 			// Use a recover mechanism to prevent panics from crashing the server
 			func() {
 				defer func() {
