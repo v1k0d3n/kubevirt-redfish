@@ -3397,3 +3397,142 @@ func TestSanitizeResourceName(t *testing.T) {
 		})
 	}
 }
+
+// TestGenerateUniquePVCNameLength tests that generated PVC names don't exceed 63 characters
+// This verifies the fix for the race condition bug where long VM names caused invalid PVC names
+func TestGenerateUniquePVCNameLength(t *testing.T) {
+	client := &Client{}
+
+	testCases := []struct {
+		name           string
+		vmName         string
+		expectedMaxLen int
+	}{
+		{
+			name:           "short VM name",
+			vmName:         "vm-01",
+			expectedMaxLen: 63,
+		},
+		{
+			name:           "medium VM name",
+			vmName:         "test-virtual-machine-with-medium-length-name",
+			expectedMaxLen: 63,
+		},
+		{
+			name:           "long VM name that would exceed limit",
+			vmName:         "ztp-cluster-with-a-very-long-name-that-exceeds-kubernetes-limits",
+			expectedMaxLen: 63,
+		},
+		{
+			name:           "extremely long VM name",
+			vmName:         "this-is-an-extremely-long-virtual-machine-name-that-definitely-exceeds-the-kubernetes-63-character-limit-for-resource-names",
+			expectedMaxLen: 63,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Generate the PVC name
+			pvcName := client.generateUniquePVCName(tc.vmName)
+
+			// Apply sanitization (as done in the actual code)
+			sanitizedPvcName := sanitizeResourceName(pvcName)
+
+			// Verify the sanitized name doesn't exceed the limit
+			if len(sanitizedPvcName) > tc.expectedMaxLen {
+				t.Errorf("Sanitized PVC name length %d exceeds maximum allowed length of %d. Name: %s",
+					len(sanitizedPvcName), tc.expectedMaxLen, sanitizedPvcName)
+			}
+
+			// Verify the name is valid (ends with alphanumeric)
+			lastChar := sanitizedPvcName[len(sanitizedPvcName)-1]
+			if !((lastChar >= 'a' && lastChar <= 'z') || (lastChar >= '0' && lastChar <= '9')) {
+				t.Errorf("Sanitized PVC name does not end with alphanumeric character: %s", sanitizedPvcName)
+			}
+
+			// For debugging: show the transformation
+			if len(pvcName) > 63 {
+				t.Logf("Original PVC name (%d chars): %s", len(pvcName), pvcName)
+				t.Logf("Sanitized PVC name (%d chars): %s", len(sanitizedPvcName), sanitizedPvcName)
+			}
+		})
+	}
+}
+
+// TestHelperPodNameLength tests that helper pod names don't exceed 63 characters
+// This verifies that the fix also applies to helper pod names
+func TestHelperPodNameLength(t *testing.T) {
+	testCases := []struct {
+		name           string
+		dataVolumeName string
+		timestamp      int64
+	}{
+		{
+			name:           "short datavolume name",
+			dataVolumeName: "vm-01-bootiso-1234567890-123456",
+			timestamp:      1729468000,
+		},
+		{
+			name:           "datavolume at 63-char limit",
+			dataVolumeName: "very-long-vm-name-bootiso-1234567890-1234567trunc12345678901",
+			timestamp:      1729468000,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Simulate helper pod name generation
+			helperPodName := fmt.Sprintf("copy-iso-%s-%d", tc.dataVolumeName, tc.timestamp)
+
+			// Apply sanitization (as done in the actual code)
+			sanitizedHelperPodName := sanitizeResourceName(helperPodName)
+
+			// Verify the sanitized name doesn't exceed the limit
+			if len(sanitizedHelperPodName) > 63 {
+				t.Errorf("Sanitized helper pod name length %d exceeds maximum allowed length of 63. Name: %s",
+					len(sanitizedHelperPodName), sanitizedHelperPodName)
+			}
+
+			// Verify the name is valid (ends with alphanumeric)
+			lastChar := sanitizedHelperPodName[len(sanitizedHelperPodName)-1]
+			if !((lastChar >= 'a' && lastChar <= 'z') || (lastChar >= '0' && lastChar <= '9')) {
+				t.Errorf("Sanitized helper pod name does not end with alphanumeric character: %s", sanitizedHelperPodName)
+			}
+
+			// For debugging: show the transformation
+			if len(helperPodName) > 63 {
+				t.Logf("Original helper pod name (%d chars): %s", len(helperPodName), helperPodName)
+				t.Logf("Sanitized helper pod name (%d chars): %s", len(sanitizedHelperPodName), sanitizedHelperPodName)
+			}
+		})
+	}
+}
+
+// TestPVCNameUniqueness tests that sanitized PVC names remain unique
+// This ensures that the sanitization doesn't cause collisions
+func TestPVCNameUniqueness(t *testing.T) {
+	client := &Client{}
+	vmName := "ztp-cluster-with-a-very-long-name-that-exceeds-kubernetes-limits"
+
+	// Generate multiple PVC names for the same VM (simulating concurrent operations)
+	names := make(map[string]int)
+
+	for i := 0; i < 100; i++ {
+		pvcName := client.generateUniquePVCName(vmName)
+		sanitizedName := sanitizeResourceName(pvcName)
+
+		names[sanitizedName]++
+
+		// Verify uniqueness
+		if names[sanitizedName] > 1 {
+			t.Errorf("Collision detected! Name %s generated %d times", sanitizedName, names[sanitizedName])
+		}
+
+		// Small delay to ensure timestamp changes
+		if i%10 == 0 {
+			time.Sleep(1 * time.Millisecond)
+		}
+	}
+
+	t.Logf("Generated %d unique sanitized PVC names", len(names))
+}
