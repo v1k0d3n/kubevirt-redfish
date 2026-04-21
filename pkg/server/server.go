@@ -2069,8 +2069,8 @@ func (s *Server) resolveSystemVMandCheckAccess(w http.ResponseWriter, r *http.Re
 				continue
 			}
 			if cfg.Namespace == namespace {
-				_, err = s.kubevirtClient.GetVM(namespace, vmName)
-				if err == nil {
+				vm, err := s.kubevirtClient.GetVM(namespace, vmName)
+				if err == nil && kubevirt.VMMatchesSelector(vm, cfg.VMSelector) {
 					vmFound = true
 					namespace = cfg.Namespace
 					chassisName = cfg.Name
@@ -2085,8 +2085,8 @@ func (s *Server) resolveSystemVMandCheckAccess(w http.ResponseWriter, r *http.Re
 				continue
 			}
 
-			_, err = s.kubevirtClient.GetVM(cfg.Namespace, vmName)
-			if err == nil {
+			vm, err := s.kubevirtClient.GetVM(cfg.Namespace, vmName)
+			if err == nil && kubevirt.VMMatchesSelector(vm, cfg.VMSelector) {
 				vmFound = true
 				namespace = cfg.Namespace
 				chassisName = cfg.Name
@@ -2100,11 +2100,7 @@ func (s *Server) resolveSystemVMandCheckAccess(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if !auth.HasChassisAccess(r, chassisName) {
-		logger.Error("Access to VM '%s' in chassis '%s' denied for user '%s'", vmName, chassisName, user.Username)
-		s.sendForbidden(w, "Access denied to system")
-		return
-	}
+	// No need to check chassis access here, it's already checked in the loop above.
 
 	ok = true
 	return

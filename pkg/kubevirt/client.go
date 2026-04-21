@@ -539,6 +539,38 @@ func (c *Client) GetVM(namespace, name string) (*kubevirtv1.VirtualMachine, erro
 	return vm, nil
 }
 
+// VMMatchesSelector checks whether a VM matches the given selector criteria.
+// A nil selector matches all VMs.
+func VMMatchesSelector(vm *kubevirtv1.VirtualMachine, selector *VMSelectorConfig) bool {
+	if selector == nil {
+		return true
+	}
+
+	if len(selector.Names) > 0 {
+		nameMatched := false
+		for _, allowed := range selector.Names {
+			if vm.Name == allowed {
+				nameMatched = true
+				break
+			}
+		}
+		if !nameMatched {
+			return false
+		}
+	}
+
+	if len(selector.Labels) > 0 {
+		vmLabels := vm.GetLabels()
+		for key, value := range selector.Labels {
+			if vmLabels[key] != value {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
 // GetVMI gets details of a specific VirtualMachineInstance
 func (c *Client) GetVMI(namespace, name string) (*kubevirtv1.VirtualMachineInstance, error) {
 	// Check if dynamicClient is initialized

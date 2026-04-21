@@ -35,6 +35,9 @@ import (
 	"github.com/v1k0d3n/kubevirt-redfish/pkg/kubevirt"
 	"github.com/v1k0d3n/kubevirt-redfish/pkg/logger"
 	"github.com/v1k0d3n/kubevirt-redfish/pkg/redfish"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
+	kubevirtv1 "kubevirt.io/api/core/v1"
 )
 
 // TestNewServer tests the NewServer constructor
@@ -3064,5 +3067,314 @@ func TestHandleBootUpdateDirect(t *testing.T) {
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		assert.NoError(t, err)
 		assert.Contains(t, response, "error")
+	})
+}
+
+func TestResolveSystemVM_VMSelectorFiltering(t *testing.T) {
+	mockDynamic := kubevirt.NewMockDynamicClient()
+	fakeK8s := fake.NewSimpleClientset()
+	client := kubevirt.NewClientWithClients(fakeK8s, mockDynamic, 30*time.Second, nil)
+
+	// VM that matches the selector (has redfish-enabled=true)
+	matchingVM := &kubevirtv1.VirtualMachine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "matching-vm",
+			Namespace: "ns-a",
+			Labels:    map[string]string{"redfish-enabled": "true"},
+		},
+		Spec: kubevirtv1.VirtualMachineSpec{},
+	}
+	// VM that does NOT match the selector (no label)
+	nonMatchingVM := &kubevirtv1.VirtualMachine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "other-vm",
+			Namespace: "ns-a",
+			Labels:    map[string]string{},
+		},
+		Spec: kubevirtv1.VirtualMachineSpec{},
+	}
+	// VM in a second namespace that matches
+	matchingVMInB := &kubevirtv1.VirtualMachine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cross-ns-vm",
+			Namespace: "ns-b",
+			Labels:    map[string]string{"redfish-enabled": "true"},
+		},
+		Spec: kubevirtv1.VirtualMachineSpec{},
+	}
+	// Same name in ns-a but without matching labels
+	nonMatchingCrossNS := &kubevirtv1.VirtualMachine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cross-ns-vm",
+			Namespace: "ns-a",
+			Labels:    map[string]string{},
+		},
+		Spec: kubevirtv1.VirtualMachineSpec{},
+	}
+
+	for _, vm := range []*kubevirtv1.VirtualMachine{matchingVM, nonMatchingVM, matchingVMInB, nonMatchingCrossNS} {
+		if err := mockDynamic.AddVM(vm); err != nil {
+			t.Fatalf("Failed to add VM %s/%s: %v", vm.Namespace, vm.Name, err)
+		}
+	}
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Host:     "localhost",
+			Port:     8080,
+			TestMode: true,
+		},
+		Auth: config.AuthConfig{
+			Users: []config.UserConfig{
+				{Username: "user1", Password: "pass1", Chassis: []string{"chassis-a", "chassis-b"}},
+			},
+		},
+		Chassis: []config.ChassisConfig{
+			{
+				Name:      "chassis-a",
+				Namespace: "ns-a",
+				VMSelector: &kubevirt.VMSelectorConfig{
+					Labels: map[string]string{"redfish-enabled": "true"},
+				},
+			},
+			{
+				Name:      "chassis-b",
+				Namespace: "ns-b",
+				VMSelector: &kubevirt.VMSelectorConfig{
+					Labels: map[string]string{"redfish-enabled": "true"},
+				},
+			},
+		},
+	}
+
+	srv := NewServer(cfg, client)
+
+	makeAuthRequest := func() *http.Request {
+		req := httptest.NewRequest("GET", "/", nil)
+		authCtx := &auth.AuthContext{
+			User: &auth.User{
+				Username: "user1",
+				Password: "pass1",
+				Chassis:  []string{"chassis-a", "chassis-b"},
+			},
+		}
+		return req.WithContext(logger.WithAuth(req.Context(), authCtx))
+	}
+
+	// --- Enhanced (namespace.vmname) naming ---
+
+	t.Run("enhanced/matching VM is resolved", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		r := makeAuthRequest()
+		ns, vm, chassis, ok := srv.resolveSystemVMandCheckAccess(w, r, "ns-a.matching-vm")
+		assert.True(t, ok)
+		assert.Equal(t, "ns-a", ns)
+		assert.Equal(t, "matching-vm", vm)
+		assert.Equal(t, "chassis-a", chassis)
+	})
+
+	t.Run("enhanced/non-matching VM is rejected", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		r := makeAuthRequest()
+		_, _, _, ok := srv.resolveSystemVMandCheckAccess(w, r, "ns-a.other-vm")
+		assert.False(t, ok)
+		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
+
+	t.Run("enhanced/non-existent VM is rejected", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		r := makeAuthRequest()
+		_, _, _, ok := srv.resolveSystemVMandCheckAccess(w, r, "ns-a.no-such-vm")
+		assert.False(t, ok)
+		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
+
+	// --- Legacy (vmname only) naming ---
+
+	t.Run("legacy/matching VM is resolved", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		r := makeAuthRequest()
+		ns, vm, chassis, ok := srv.resolveSystemVMandCheckAccess(w, r, "matching-vm")
+		assert.True(t, ok)
+		assert.Equal(t, "ns-a", ns)
+		assert.Equal(t, "matching-vm", vm)
+		assert.Equal(t, "chassis-a", chassis)
+	})
+
+	t.Run("legacy/non-matching VM is rejected", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		r := makeAuthRequest()
+		_, _, _, ok := srv.resolveSystemVMandCheckAccess(w, r, "other-vm")
+		assert.False(t, ok)
+		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
+
+	t.Run("legacy/VM found in second namespace after selector mismatch in first", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		r := makeAuthRequest()
+		ns, vm, chassis, ok := srv.resolveSystemVMandCheckAccess(w, r, "cross-ns-vm")
+		assert.True(t, ok, "should find the VM in ns-b after selector mismatch in ns-a")
+		assert.Equal(t, "ns-b", ns)
+		assert.Equal(t, "cross-ns-vm", vm)
+		assert.Equal(t, "chassis-b", chassis)
+	})
+
+	// --- Auth edge cases ---
+
+	t.Run("unauthenticated request is rejected", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/", nil)
+		_, _, _, ok := srv.resolveSystemVMandCheckAccess(w, r, "matching-vm")
+		assert.False(t, ok)
+		assert.Equal(t, http.StatusForbidden, w.Code)
+	})
+
+	t.Run("user without chassis access is rejected with 404", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/", nil)
+		authCtx := &auth.AuthContext{
+			User: &auth.User{
+				Username: "limited",
+				Password: "pass",
+				Chassis:  []string{"chassis-x"},
+			},
+		}
+		r := req.WithContext(logger.WithAuth(req.Context(), authCtx))
+		_, _, _, ok := srv.resolveSystemVMandCheckAccess(w, r, "ns-a.matching-vm")
+		assert.False(t, ok)
+		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
+}
+
+func TestResolveSystemVM_NilSelector(t *testing.T) {
+	mockDynamic := kubevirt.NewMockDynamicClient()
+	fakeK8s := fake.NewSimpleClientset()
+	client := kubevirt.NewClientWithClients(fakeK8s, mockDynamic, 30*time.Second, nil)
+
+	anyVM := &kubevirtv1.VirtualMachine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "any-vm",
+			Namespace: "default",
+		},
+		Spec: kubevirtv1.VirtualMachineSpec{},
+	}
+	if err := mockDynamic.AddVM(anyVM); err != nil {
+		t.Fatalf("Failed to add VM: %v", err)
+	}
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{Host: "localhost", Port: 8080, TestMode: true},
+		Auth: config.AuthConfig{
+			Users: []config.UserConfig{
+				{Username: "admin", Password: "pass", Chassis: []string{"open-chassis"}},
+			},
+		},
+		Chassis: []config.ChassisConfig{
+			{
+				Name:       "open-chassis",
+				Namespace:  "default",
+				VMSelector: nil,
+			},
+		},
+	}
+
+	srv := NewServer(cfg, client)
+	req := httptest.NewRequest("GET", "/", nil)
+	authCtx := &auth.AuthContext{
+		User: &auth.User{Username: "admin", Password: "pass", Chassis: []string{"open-chassis"}},
+	}
+	r := req.WithContext(logger.WithAuth(req.Context(), authCtx))
+
+	t.Run("enhanced/nil selector matches any VM", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		ns, vm, chassis, ok := srv.resolveSystemVMandCheckAccess(w, r, "default.any-vm")
+		assert.True(t, ok)
+		assert.Equal(t, "default", ns)
+		assert.Equal(t, "any-vm", vm)
+		assert.Equal(t, "open-chassis", chassis)
+	})
+
+	t.Run("legacy/nil selector matches any VM", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		ns, vm, chassis, ok := srv.resolveSystemVMandCheckAccess(w, r, "any-vm")
+		assert.True(t, ok)
+		assert.Equal(t, "default", ns)
+		assert.Equal(t, "any-vm", vm)
+		assert.Equal(t, "open-chassis", chassis)
+	})
+}
+
+func TestResolveSystemVM_NameSelector(t *testing.T) {
+	mockDynamic := kubevirt.NewMockDynamicClient()
+	fakeK8s := fake.NewSimpleClientset()
+	client := kubevirt.NewClientWithClients(fakeK8s, mockDynamic, 30*time.Second, nil)
+
+	allowedVM := &kubevirtv1.VirtualMachine{
+		ObjectMeta: metav1.ObjectMeta{Name: "allowed-vm", Namespace: "ns1"},
+		Spec:       kubevirtv1.VirtualMachineSpec{},
+	}
+	blockedVM := &kubevirtv1.VirtualMachine{
+		ObjectMeta: metav1.ObjectMeta{Name: "blocked-vm", Namespace: "ns1"},
+		Spec:       kubevirtv1.VirtualMachineSpec{},
+	}
+	for _, vm := range []*kubevirtv1.VirtualMachine{allowedVM, blockedVM} {
+		if err := mockDynamic.AddVM(vm); err != nil {
+			t.Fatalf("Failed to add VM: %v", err)
+		}
+	}
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{Host: "localhost", Port: 8080, TestMode: true},
+		Auth: config.AuthConfig{
+			Users: []config.UserConfig{
+				{Username: "u", Password: "p", Chassis: []string{"c1"}},
+			},
+		},
+		Chassis: []config.ChassisConfig{
+			{
+				Name:      "c1",
+				Namespace: "ns1",
+				VMSelector: &kubevirt.VMSelectorConfig{
+					Names: []string{"allowed-vm"},
+				},
+			},
+		},
+	}
+
+	srv := NewServer(cfg, client)
+	makeReq := func() *http.Request {
+		req := httptest.NewRequest("GET", "/", nil)
+		authCtx := &auth.AuthContext{
+			User: &auth.User{Username: "u", Password: "p", Chassis: []string{"c1"}},
+		}
+		return req.WithContext(logger.WithAuth(req.Context(), authCtx))
+	}
+
+	t.Run("enhanced/allowed name passes", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		_, vm, _, ok := srv.resolveSystemVMandCheckAccess(w, makeReq(), "ns1.allowed-vm")
+		assert.True(t, ok)
+		assert.Equal(t, "allowed-vm", vm)
+	})
+
+	t.Run("enhanced/blocked name is rejected", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		_, _, _, ok := srv.resolveSystemVMandCheckAccess(w, makeReq(), "ns1.blocked-vm")
+		assert.False(t, ok)
+		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
+
+	t.Run("legacy/allowed name passes", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		_, vm, _, ok := srv.resolveSystemVMandCheckAccess(w, makeReq(), "allowed-vm")
+		assert.True(t, ok)
+		assert.Equal(t, "allowed-vm", vm)
+	})
+
+	t.Run("legacy/blocked name is rejected", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		_, _, _, ok := srv.resolveSystemVMandCheckAccess(w, makeReq(), "blocked-vm")
+		assert.False(t, ok)
+		assert.Equal(t, http.StatusNotFound, w.Code)
 	})
 }
