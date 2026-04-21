@@ -219,17 +219,9 @@ func NewServer(config *config.Config, kubevirtClient *kubevirt.Client) *Server {
 // Returns:
 // - error: Any error that occurred during server startup or operation
 func (s *Server) Start() error {
-	// Start the boot-once watcher if not in test mode
+	// Start watchers if not in test mode
 	if !s.config.Server.TestMode && s.kubevirtClient != nil {
-		namespaces := make([]string, 0, len(s.config.Chassis))
-		for _, chassis := range s.config.Chassis {
-			namespaces = append(namespaces, chassis.Namespace)
-		}
-		if len(namespaces) > 0 {
-			s.kubevirtClient.StartBootOnceWatcher(context.Background(), namespaces)
-			s.kubevirtClient.StartImportPodWatcher(context.Background(), namespaces)
-			s.kubevirtClient.StartCDIPVCWatcher(context.Background(), namespaces)
-		}
+		s.startWatchers()
 	}
 
 	// Create HTTP server
@@ -347,15 +339,32 @@ func (s *Server) Shutdown() error {
 }
 
 // UpdateConfig safely updates the server's configuration at runtime.
-// This is used for hot-reloading configuration changes.
-// Parameters:
-// - newConfig: The new configuration to apply
+// This is used for hot-reloading configuration changes. Watchers are
+// stopped and restarted so that namespace additions/removals are picked up.
 func (s *Server) UpdateConfig(newConfig *config.Config) {
 	s.configMutex.Lock()
-	defer s.configMutex.Unlock()
-
 	s.config = newConfig
+	s.configMutex.Unlock()
+
 	logger.Info("Configuration hot-reloaded successfully")
+
+	if !newConfig.Server.TestMode && s.kubevirtClient != nil {
+		s.startWatchers()
+	}
+}
+
+// startWatchers (re)starts all Kubernetes object watchers for the
+// namespaces listed in the current chassis configuration. Existing
+// watchers are stopped first, so this is safe to call on config reload.
+func (s *Server) startWatchers() {
+	s.configMutex.RLock()
+	namespaces := make([]string, 0, len(s.config.Chassis))
+	for _, chassis := range s.config.Chassis {
+		namespaces = append(namespaces, chassis.Namespace)
+	}
+	s.configMutex.RUnlock()
+
+	s.kubevirtClient.RestartWatchers(context.Background(), namespaces)
 }
 
 // createMux creates the HTTP request multiplexer with all Redfish API endpoints.

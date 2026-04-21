@@ -320,6 +320,16 @@ func (c *Client) Close() error {
 	return nil
 }
 
+// RestartWatchers stops all running watchers and starts new ones for the
+// given namespaces. This is intended to be called on config reload so that
+// namespace additions/removals are picked up.
+func (c *Client) RestartWatchers(ctx context.Context, namespaces []string) {
+	logger.Info("Restarting all watchers for namespaces: %v", namespaces)
+	c.StartBootOnceWatcher(ctx, namespaces)
+	c.StartImportPodWatcher(ctx, namespaces)
+	c.StartCDIPVCWatcher(ctx, namespaces)
+}
+
 // retryWithBackoff executes a function with exponential backoff retry logic
 func (c *Client) retryWithBackoff(operation string, fn func() error) error {
 	maxRetries := 3
@@ -2947,6 +2957,11 @@ const (
 	CDIManagedLabel       = "cdi.kubevirt.io"
 )
 
+// reconcileInterval is the period between periodic sweeps of pending objects.
+// This catches race conditions where a watch event was missed or an import
+// completed between the IsImportInProgress check and the label write.
+const reconcileInterval = time.Minute
+
 // VirtualMediaURLAnnotationPrefix is used to record the image URL of currently
 // inserted virtual media. The device name is appended (e.g. "virtual-media.redfish/cdrom0").
 const VirtualMediaURLAnnotationPrefix = "virtual-media.redfish/"
@@ -3054,13 +3069,11 @@ func (c *Client) getVMIUID(namespace, name string) string {
 // BOOT ONCE WATCHER
 // =============================================================================
 
-// StartBootOnceWatcher starts the Kubernetes watch for labeled VMs
-// namespaces: list of namespaces to watch (from chassis config)
+// StartBootOnceWatcher starts the Kubernetes watch for labeled VMs.
+// If an existing watcher is running it is stopped first, making this
+// safe to call on config reload.
 func (c *Client) StartBootOnceWatcher(ctx context.Context, namespaces []string) {
-	if c.watcherCancel != nil {
-		logger.Warning("Boot-once watcher already running, not starting another")
-		return
-	}
+	c.stopBootOnceWatcher()
 
 	c.watcherCtx, c.watcherCancel = context.WithCancel(ctx)
 
@@ -3138,17 +3151,26 @@ func (c *Client) runNamespaceWatcher(ctx context.Context, namespace string) {
 	}
 }
 
-// processWatchEvents handles events from a watch channel
+// processWatchEvents handles events from a watch channel.
+// In addition to reacting to individual events it runs a periodic sweep
+// every reconcileInterval to catch any objects that fell through the cracks
+// (e.g. the race between IsImportInProgress and SetPowerAfterImportLabel).
 func (c *Client) processWatchEvents(ctx context.Context, namespace string, watcher watch.Interface) {
 	defer watcher.Stop()
+
+	ticker := time.NewTicker(reconcileInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-ticker.C:
+			if err := c.reconcileExistingBootOnceVMs(namespace); err != nil {
+				logger.Error("Periodic VM reconciliation failed for namespace %s: %v", namespace, err)
+			}
 		case event, ok := <-watcher.ResultChan():
 			if !ok {
-				// Channel closed, need to reconnect
 				return
 			}
 
@@ -3156,14 +3178,12 @@ func (c *Client) processWatchEvents(ctx context.Context, namespace string, watch
 
 			switch event.Type {
 			case watch.Added, watch.Modified:
-				// Convert to unstructured
 				u, ok := event.Object.(*unstructured.Unstructured)
 				if !ok {
 					logger.Warning("Unexpected object type in watch event: %T", event.Object)
 					continue
 				}
 
-				// Convert to typed VM
 				vm, err := unstructuredToVM(u)
 				if err != nil {
 					logger.Error("Failed to convert watch event to VM: %v", err)
@@ -3173,7 +3193,6 @@ func (c *Client) processWatchEvents(ctx context.Context, namespace string, watch
 				c.handleVMUpdate(vm)
 
 			case watch.Deleted:
-				// VM deleted, nothing to do - boot-once state is gone with it
 				logger.Debug("VM deleted from boot-once watch")
 
 			case watch.Error:
@@ -3405,12 +3424,11 @@ func (c *Client) reconcileExistingBootOnceVMs(namespace string) error {
 // IMPORT POD WATCHER
 // =============================================================================
 
-// StartImportPodWatcher starts watching for import helper pods across configured namespaces
+// StartImportPodWatcher starts watching for import helper pods across configured namespaces.
+// If an existing watcher is running it is stopped first, making this
+// safe to call on config reload.
 func (c *Client) StartImportPodWatcher(ctx context.Context, namespaces []string) {
-	if c.importWatcherCancel != nil {
-		logger.Warning("Import pod watcher already running, not starting another")
-		return
-	}
+	c.stopImportPodWatcher()
 
 	c.importWatcherCtx, c.importWatcherCancel = context.WithCancel(ctx)
 
@@ -3479,14 +3497,23 @@ func (c *Client) runImportPodWatcher(ctx context.Context, namespace string) {
 	}
 }
 
-// processImportPodEvents handles events from the import pod watch channel
+// processImportPodEvents handles events from the import pod watch channel.
+// A periodic sweep every reconcileInterval catches terminal pods whose
+// events were missed.
 func (c *Client) processImportPodEvents(ctx context.Context, namespace string, watcher watch.Interface) {
 	defer watcher.Stop()
+
+	ticker := time.NewTicker(reconcileInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-ticker.C:
+			if err := c.reconcileExistingImportPods(namespace); err != nil {
+				logger.Error("Periodic import pod reconciliation failed for namespace %s: %v", namespace, err)
+			}
 		case event, ok := <-watcher.ResultChan():
 			if !ok {
 				return
@@ -3644,11 +3671,11 @@ func (c *Client) reconcileExistingImportPods(namespace string) error {
 // =============================================================================
 
 // StartCDIPVCWatcher starts watching labeled PVCs for CDI import completion
+// StartCDIPVCWatcher starts watching for CDI PVC status changes.
+// If an existing watcher is running it is stopped first, making this
+// safe to call on config reload.
 func (c *Client) StartCDIPVCWatcher(ctx context.Context, namespaces []string) {
-	if c.pvcWatcherCancel != nil {
-		logger.Warning("CDI PVC watcher already running, not starting another")
-		return
-	}
+	c.stopCDIPVCWatcher()
 
 	c.pvcWatcherCtx, c.pvcWatcherCancel = context.WithCancel(ctx)
 
@@ -3717,10 +3744,17 @@ func (c *Client) runCDIPVCWatcher(ctx context.Context, namespace string) {
 func (c *Client) processCDIPVCEvents(ctx context.Context, namespace string, watcher watch.Interface) {
 	defer watcher.Stop()
 
+	ticker := time.NewTicker(reconcileInterval)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-ticker.C:
+			if err := c.reconcileExistingCDIPVCs(namespace); err != nil {
+				logger.Error("Periodic CDI PVC reconciliation failed for namespace %s: %v", namespace, err)
+			}
 		case event, ok := <-watcher.ResultChan():
 			if !ok {
 				return
