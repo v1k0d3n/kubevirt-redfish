@@ -968,6 +968,8 @@ func (s *Server) handleVirtualMediaCollection(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	responseSystemID := config.GenerateSystemID(s.currentConfig().SystemIDConvention, namespace, vmName)
+
 	// Get virtual media devices using the correct namespace and VM name
 	mediaDevices, err := s.kubevirtClient.GetVMVirtualMedia(namespace, vmName)
 	if err != nil {
@@ -998,13 +1000,13 @@ func (s *Server) handleVirtualMediaCollection(w http.ResponseWriter, r *http.Req
 	var members []redfish.Link
 	for _, device := range mediaDevices {
 		members = append(members, redfish.Link{
-			OdataID: fmt.Sprintf("/redfish/v1/Systems/%s/VirtualMedia/%s", systemName, device),
+			OdataID: fmt.Sprintf("/redfish/v1/Systems/%s/VirtualMedia/%s", responseSystemID, device),
 		})
 	}
 
 	collection := redfish.VirtualMediaCollection{
 		OdataContext:      "/redfish/v1/$metadata#VirtualMediaCollection.VirtualMediaCollection",
-		OdataID:           fmt.Sprintf("/redfish/v1/Systems/%s/VirtualMedia", systemName),
+		OdataID:           fmt.Sprintf("/redfish/v1/Systems/%s/VirtualMedia", responseSystemID),
 		OdataType:         "#VirtualMediaCollection.VirtualMediaCollection",
 		Name:              "Virtual Media Collection",
 		Members:           members,
@@ -1037,6 +1039,8 @@ func (s *Server) handleGetVirtualMedia(w http.ResponseWriter, r *http.Request, s
 		return
 	}
 
+	responseSystemID := config.GenerateSystemID(s.currentConfig().SystemIDConvention, namespace, vmName)
+
 	// Check if media is inserted using the internal media ID
 	inserted, err := s.kubevirtClient.IsVirtualMediaInserted(namespace, vmName, internalMediaID)
 	if err != nil {
@@ -1047,9 +1051,9 @@ func (s *Server) handleGetVirtualMedia(w http.ResponseWriter, r *http.Request, s
 
 	virtualMedia := redfish.VirtualMedia{
 		OdataContext:   "/redfish/v1/$metadata#VirtualMedia.VirtualMedia",
-		OdataID:        fmt.Sprintf("/redfish/v1/Systems/%s/VirtualMedia/%s", systemName, mediaID),
+		OdataID:        fmt.Sprintf("/redfish/v1/Systems/%s/VirtualMedia/%s", responseSystemID, mediaID),
 		OdataType:      "#VirtualMedia.v1_0_0.VirtualMedia",
-		OdataEtag:      fmt.Sprintf("W/\"%d\"", time.Now().Unix()), // Simple ETag for versioning
+		OdataEtag:      fmt.Sprintf("W/\"%d\"", time.Now().Unix()),
 		ID:             mediaID,
 		Name:           fmt.Sprintf("Virtual Media %s", mediaID),
 		MediaTypes:     []string{"CD", "DVD"},
@@ -1058,10 +1062,10 @@ func (s *Server) handleGetVirtualMedia(w http.ResponseWriter, r *http.Request, s
 		WriteProtected: true,
 		Actions: redfish.VirtualMediaActions{
 			InsertMedia: redfish.InsertMediaAction{
-				Target: fmt.Sprintf("/redfish/v1/Systems/%s/VirtualMedia/%s/Actions/VirtualMedia.InsertMedia", systemName, mediaID),
+				Target: fmt.Sprintf("/redfish/v1/Systems/%s/VirtualMedia/%s/Actions/VirtualMedia.InsertMedia", responseSystemID, mediaID),
 			},
 			EjectMedia: redfish.EjectMediaAction{
-				Target: fmt.Sprintf("/redfish/v1/Systems/%s/VirtualMedia/%s/Actions/VirtualMedia.EjectMedia", systemName, mediaID),
+				Target: fmt.Sprintf("/redfish/v1/Systems/%s/VirtualMedia/%s/Actions/VirtualMedia.EjectMedia", responseSystemID, mediaID),
 			},
 		},
 	}
@@ -1179,6 +1183,8 @@ func (s *Server) handleEjectVirtualMedia(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
+	responseSystemID := config.GenerateSystemID(s.currentConfig().SystemIDConvention, namespace, vmName)
+
 	// Eject virtual media using the internal media ID
 	err := s.kubevirtClient.EjectVirtualMedia(namespace, vmName, internalMediaID)
 	if err != nil {
@@ -1194,7 +1200,7 @@ func (s *Server) handleEjectVirtualMedia(w http.ResponseWriter, r *http.Request,
 	s.encodeJSONResponse(w, map[string]interface{}{
 		"@odata.context": "/redfish/v1/$metadata#ActionResponse.ActionResponse",
 		"@odata.type":    "#ActionResponse.v1_0_0.ActionResponse",
-		"@odata.id":      fmt.Sprintf("/redfish/v1/Systems/%s/VirtualMedia/%s/Actions/VirtualMedia.EjectMedia", systemName, mediaID),
+		"@odata.id":      fmt.Sprintf("/redfish/v1/Systems/%s/VirtualMedia/%s/Actions/VirtualMedia.EjectMedia", responseSystemID, mediaID),
 		"Id":             "EjectMedia",
 		"Name":           "Eject Media Action",
 		"Status": map[string]string{
@@ -1237,7 +1243,7 @@ func (s *Server) handleBootUpdate(w http.ResponseWriter, r *http.Request, system
 	// Log the boot update payload for debugging
 	logger.Info("Boot update payload for VM %s: %+v", systemName, bootUpdate)
 
-	namespace, vmName, _, ok := s.resolveSystemVMandCheckAccess(w, r, systemName)
+	namespace, vmName, chassisName, ok := s.resolveSystemVMandCheckAccess(w, r, systemName)
 	if !ok {
 		return
 	}
@@ -1348,13 +1354,15 @@ func (s *Server) handleBootUpdate(w http.ResponseWriter, r *http.Request, system
 	}
 
 	// Return the updated ComputerSystem resource (Redfish spec requirement)
+	responseSystemID := config.GenerateSystemID(s.currentConfig().SystemIDConvention, namespace, vmName)
+
 	system := redfish.ComputerSystem{
 		OdataContext: "/redfish/v1/$metadata#ComputerSystem.ComputerSystem",
-		OdataID:      fmt.Sprintf("/redfish/v1/Systems/%s", systemName),
+		OdataID:      fmt.Sprintf("/redfish/v1/Systems/%s", responseSystemID),
 		OdataType:    "#ComputerSystem.v1_0_0.ComputerSystem",
-		OdataEtag:    fmt.Sprintf("W/\"%d\"", time.Now().Unix()), // Simple ETag for versioning
-		ID:           systemName,
-		Name:         systemName,
+		OdataEtag:    fmt.Sprintf("W/\"%d\"", time.Now().Unix()),
+		ID:           responseSystemID,
+		Name:         vmName,
 		SystemType:   "Virtual",
 		Status: redfish.Status{
 			State:  "Enabled",
@@ -1362,20 +1370,20 @@ func (s *Server) handleBootUpdate(w http.ResponseWriter, r *http.Request, system
 		},
 		PowerState: powerState,
 		Memory: redfish.MemorySummary{
-			OdataID:              fmt.Sprintf("/redfish/v1/Systems/%s/Memory", systemName),
+			OdataID:              fmt.Sprintf("/redfish/v1/Systems/%s/Memory", responseSystemID),
 			TotalSystemMemoryGiB: memoryGB,
 		},
 		ProcessorSummary: redfish.ProcessorSummary{
 			Count: cpuCount,
 		},
 		Storage: redfish.Link{
-			OdataID: fmt.Sprintf("/redfish/v1/Systems/%s/Storage", systemName),
+			OdataID: fmt.Sprintf("/redfish/v1/Systems/%s/Storage", responseSystemID),
 		},
 		EthernetInterfaces: redfish.Link{
-			OdataID: fmt.Sprintf("/redfish/v1/Systems/%s/EthernetInterfaces", systemName),
+			OdataID: fmt.Sprintf("/redfish/v1/Systems/%s/EthernetInterfaces", responseSystemID),
 		},
 		VirtualMedia: redfish.Link{
-			OdataID: fmt.Sprintf("/redfish/v1/Systems/%s/VirtualMedia", systemName),
+			OdataID: fmt.Sprintf("/redfish/v1/Systems/%s/VirtualMedia", responseSystemID),
 		},
 		Boot: redfish.Boot{
 			BootSourceOverrideEnabled:               bootOptions["bootSourceOverrideEnabled"].(string),
@@ -1386,7 +1394,7 @@ func (s *Server) handleBootUpdate(w http.ResponseWriter, r *http.Request, system
 		},
 		Actions: redfish.Actions{
 			Reset: redfish.ResetAction{
-				Target: fmt.Sprintf("/redfish/v1/Systems/%s/Actions/ComputerSystem.Reset", systemName),
+				Target: fmt.Sprintf("/redfish/v1/Systems/%s/Actions/ComputerSystem.Reset", responseSystemID),
 				ResetType: []string{
 					"On", "ForceOff", "GracefulShutdown", "ForceRestart", "GracefulRestart", "Pause", "Resume",
 				},
@@ -1395,7 +1403,7 @@ func (s *Server) handleBootUpdate(w http.ResponseWriter, r *http.Request, system
 		Links: redfish.SystemLinks{
 			ManagedBy: []redfish.Link{
 				{
-					OdataID: "/redfish/v1/Managers/1",
+					OdataID: fmt.Sprintf("/redfish/v1/Managers/%s", chassisName),
 				},
 			},
 		},
