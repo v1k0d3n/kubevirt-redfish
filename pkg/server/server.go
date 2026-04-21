@@ -338,6 +338,17 @@ func (s *Server) Shutdown() error {
 	return s.httpServer.Shutdown(ctx)
 }
 
+// currentConfig returns a snapshot of the current configuration, safe
+// to use outside the configMutex. Because *config.Config is replaced
+// atomically (never mutated in place), holding a pointer obtained
+// under RLock is safe for the lifetime of a single request.
+func (s *Server) currentConfig() *config.Config {
+	s.configMutex.RLock()
+	cfg := s.config
+	s.configMutex.RUnlock()
+	return cfg
+}
+
 // UpdateConfig safely updates the server's configuration at runtime.
 // This is used for hot-reloading configuration changes. Watchers are
 // stopped and restarted so that namespace additions/removals are picked up.
@@ -633,7 +644,8 @@ func (s *Server) handleChassis(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get chassis configuration
-	chassisConfig, err := s.config.GetChassisByName(chassisName)
+	cfg := s.currentConfig()
+	chassisConfig, err := cfg.GetChassisByName(chassisName)
 	if err != nil {
 		s.sendNotFound(w, "Chassis not found")
 		return
@@ -655,8 +667,7 @@ func (s *Server) handleChassis(w http.ResponseWriter, r *http.Request) {
 	// Build computer system links
 	var computerSystems []redfish.Link
 	for _, vmName := range vms {
-		// Generate the correct System ID based on configuration
-		systemID := config.GenerateSystemID(s.config.SystemIDConvention, chassisConfig.Namespace, vmName)
+		systemID := config.GenerateSystemID(cfg.SystemIDConvention, chassisConfig.Namespace, vmName)
 		computerSystems = append(computerSystems, redfish.Link{
 			OdataID: fmt.Sprintf("/redfish/v1/Systems/%s", systemID),
 		})
@@ -706,10 +717,11 @@ func (s *Server) handleSystemsCollection(w http.ResponseWriter, r *http.Request)
 	}
 
 	user := auth.GetUser(r)
+	cfg := s.currentConfig()
 	var members []redfish.Link
 
 	for _, chassisName := range user.Chassis {
-		chassisConfig, err := s.config.GetChassisByName(chassisName)
+		chassisConfig, err := cfg.GetChassisByName(chassisName)
 		if err != nil {
 			continue
 		}
@@ -721,8 +733,7 @@ func (s *Server) handleSystemsCollection(w http.ResponseWriter, r *http.Request)
 		}
 
 		for _, vmName := range vms {
-			// Generate the correct System ID based on configuration
-			systemID := config.GenerateSystemID(s.config.SystemIDConvention, chassisConfig.Namespace, vmName)
+			systemID := config.GenerateSystemID(cfg.SystemIDConvention, chassisConfig.Namespace, vmName)
 			members = append(members, redfish.Link{
 				OdataID: fmt.Sprintf("/redfish/v1/Systems/%s", systemID),
 			})
@@ -828,7 +839,7 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate the correct System ID for the response
-	responseSystemID := config.GenerateSystemID(s.config.SystemIDConvention, namespace, vmName)
+	responseSystemID := config.GenerateSystemID(s.currentConfig().SystemIDConvention, namespace, vmName)
 
 	// Return the ComputerSystem resource
 	system := redfish.ComputerSystem{
@@ -1430,16 +1441,17 @@ func (s *Server) handleManager(w http.ResponseWriter, r *http.Request) {
 
 	// Get user and their accessible systems
 	user := auth.GetUser(r)
+	cfg := s.currentConfig()
 	var managerForSystems []map[string]string
 
 	// Build dynamic ManagerForSystems links based on user's accessible chassis
 	for _, chassisName := range user.Chassis {
-		config, err := s.config.GetChassisByName(chassisName)
+		chassisCfg, err := cfg.GetChassisByName(chassisName)
 		if err != nil {
 			continue
 		}
 
-		vms, err := s.kubevirtClient.ListVMsWithSelector(config.Namespace, config.VMSelector)
+		vms, err := s.kubevirtClient.ListVMsWithSelector(chassisCfg.Namespace, chassisCfg.VMSelector)
 		if err != nil {
 			logger.Error("Failed to list VMs for chassis %s: %v", chassisName, err)
 			continue
@@ -1586,7 +1598,8 @@ func (s *Server) handlePowerAction(w http.ResponseWriter, r *http.Request, syste
 			return
 		}
 
-		responseSystemID := config.GenerateSystemID(s.config.SystemIDConvention, namespace, vmName)
+		cfg := s.currentConfig()
+		responseSystemID := config.GenerateSystemID(cfg.SystemIDConvention, namespace, vmName)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		s.setCacheHeaders(w, "action")
@@ -1619,7 +1632,7 @@ func (s *Server) handlePowerAction(w http.ResponseWriter, r *http.Request, syste
 	}
 
 	// Generate the correct System ID for the response
-	responseSystemID := config.GenerateSystemID(s.config.SystemIDConvention, namespace, vmName)
+	responseSystemID := config.GenerateSystemID(s.currentConfig().SystemIDConvention, namespace, vmName)
 
 	// Return success response with proper Redfish format
 	w.Header().Set("Content-Type", "application/json")
@@ -1798,7 +1811,7 @@ func (s *Server) sendOptimizedJSON(w http.ResponseWriter, r *http.Request, data 
 	w.Header().Set("Content-Type", "application/json")
 
 	// In test mode, use standard JSON marshaling
-	if s.config.Server.TestMode || s.memoryManager == nil {
+	if s.currentConfig().Server.TestMode || s.memoryManager == nil {
 		jsonData, err := json.Marshal(data)
 		if err != nil {
 			logger.Error("Failed to marshal JSON response: %v", err)
@@ -2020,7 +2033,7 @@ func (s *Server) sendJSONResponse(w http.ResponseWriter, statusCode int, data in
 	w.Header().Set("Content-Type", "application/json")
 
 	// In test mode, use standard JSON marshaling
-	if s.config.Server.TestMode || s.memoryManager == nil {
+	if s.currentConfig().Server.TestMode || s.memoryManager == nil {
 		jsonData, err := json.Marshal(data)
 		if err != nil {
 			logger.Error("Failed to marshal JSON response: %v", err)
@@ -2070,10 +2083,12 @@ func (s *Server) resolveSystemVMandCheckAccess(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	currentCfg := s.currentConfig()
+
 	var vmFound bool
 	if namespace != "" {
 		for _, chassis := range user.Chassis {
-			cfg, err := s.config.GetChassisByName(chassis)
+			cfg, err := currentCfg.GetChassisByName(chassis)
 			if err != nil {
 				continue
 			}
@@ -2089,7 +2104,7 @@ func (s *Server) resolveSystemVMandCheckAccess(w http.ResponseWriter, r *http.Re
 		}
 	} else {
 		for _, chassis := range user.Chassis {
-			cfg, err := s.config.GetChassisByName(chassis)
+			cfg, err := currentCfg.GetChassisByName(chassis)
 			if err != nil {
 				continue
 			}
