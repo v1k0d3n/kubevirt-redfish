@@ -1,8 +1,8 @@
 # NOTICE / ARCHIVED PROJECT
 
-PROJECT HAS MOVED TO: (https://github.com/kubevirt/redfish-controller)[https://github.com/kubevirt/redfish-controller]
+PROJECT HAS MOVED TO: [github.com/kubevirt/redfish-controller](https://github.com/kubevirt/redfish-controller)
 
-This archived project is no longer taking PRs or issues. Please go to the official (https://github.com/kubevirt/redfish-controller)[KubeVirt] project for questions, support, or contributions.
+This archived project is no longer taking PRs or issues. Please go to the official [KubeVirt](https://github.com/kubevirt/redfish-controller) project for questions, support, or contributions.
 
 # KubeVirt Redfish
 
