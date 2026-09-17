@@ -130,8 +130,9 @@ route:
   enabled: true
   
   # Route hostname
-  # This should be a valid hostname that resolves to your OpenShift cluster (you will need to change this setting to match your OpenShift environment )
-  host: "kubevirt-redfish-default.apps.clustername.example.com"
+  # By default, the host variable is blank, the FQDN for the Route will be generated automatically with the wildcard App Ingress.
+  # If you don't want to use the default generated name, this should be a valid hostname that resolves to your OpenShift cluster
+  host: ""
   
   # Additional labels for the route (no need to change these settings unless you're testing or debugging)
   labels: {}
