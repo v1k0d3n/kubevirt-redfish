@@ -1,3 +1,9 @@
+# NOTICE / ARCHIVED PROJECT
+
+PROJECT HAS MOVED TO: (https://github.com/kubevirt/redfish-controller)[https://github.com/kubevirt/redfish-controller]
+
+This archived project is no longer taking PRs or issues. Please go to the official (https://github.com/kubevirt/redfish-controller)[KubeVirt] project for questions, support, or contributions.
+
 # KubeVirt Redfish
 
 [![CI/CD](https://github.com/v1k0d3n/kubevirt-redfish/actions/workflows/ci.yml/badge.svg)](https://github.com/v1k0d3n/kubevirt-redfish/actions)
